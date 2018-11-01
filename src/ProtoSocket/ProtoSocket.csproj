@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard1.3</TargetFramework>
+    <Authors>Alan Doherty &amp; WIFIPLUG Ltd</Authors>
+    <Company>Alan Doherty</Company>
+    <Version>0.1.0</Version>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Description>A networking library for frame-based, performant asynchronous sockets on .NET Core</Description>
+    <Copyright>Alan Doherty 2018</Copyright>
+    <PackageLicenseUrl>https://github.com/alandoherty/protosocket-net/blob/master/LICENSE</PackageLicenseUrl>
+    <PackageProjectUrl>https://github.com/alandoherty/protosocket-net</PackageProjectUrl>
+    <PackageIconUrl>https://s3-eu-west-1.amazonaws.com/assets.alandoherty.co.uk/github/protosocket-net-nuget.png</PackageIconUrl>
+    <RepositoryUrl></RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Net.Security" Version="4.3.2" />
+    <PackageReference Include="System.Threading.Tasks.Dataflow" Version="4.9.0" />
+  </ItemGroup>
+
+</Project>
