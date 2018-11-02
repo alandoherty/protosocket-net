@@ -34,6 +34,8 @@ You can find two examples inside the project source code. An implementation of a
 
 In the Minecraft example, you can type `/text Moi moi or /texta Moi moi` for 3D text to appear in your world.
 
+![Example](docs/img/example_minecraft.png)
+
 ## Contributing
 
 Any pull requests or bug reports are welcome, please try and keep to the existing style conventions and comment any additions.
