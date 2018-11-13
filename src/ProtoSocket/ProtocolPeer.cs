@@ -643,6 +643,7 @@ namespace ProtoSocket
 
                     // if the frame is null we've reached end of stream
                     if (frame == null) {
+                        _closeReason = "End of stream";
                         ForceClose();
                         return;
                     }

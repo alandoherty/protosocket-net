@@ -29,6 +29,8 @@ namespace Example.Minecraft
             foreach(Player p in _world.Players) {
                 p.Message(-1, player.Name + " disconnected");
             }
+
+            Console.WriteLine(e.Peer.RemoteEndPoint + " disconnected due to " + e.Peer.CloseReason);
         }
 
         protected async override void OnConnected(object sender, PeerConnectedEventArgs<ClassicPacket> e) {

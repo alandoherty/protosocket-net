@@ -30,9 +30,9 @@ namespace Example.Minecraft
         public async Task<ClassicPacket> ReadAsync(Stream stream, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
             // read packet id
             byte[] idBuffer = new byte[1];
-            
+
             if (await stream.ReadAsync(idBuffer, 0, 1).ConfigureAwait(false) == 0)
-                throw new IOException("The packet identifier could not be read");
+                return null;
 
             // validate packet id
             PacketId packetId = (PacketId)idBuffer[0];
@@ -46,7 +46,8 @@ namespace Example.Minecraft
             // read packet payload
             byte[] packetPayload = new byte[packetSize];
 
-            await stream.ReadBlockAsync(packetPayload, 0, packetSize, cancellationToken).ConfigureAwait(false);
+            if (await stream.ReadBlockAsync(packetPayload, 0, packetSize, cancellationToken).ConfigureAwait(false) == 0)
+                return null;
 
             // create packet
             return new ClassicPacket() {
