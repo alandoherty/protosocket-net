@@ -15,7 +15,7 @@ namespace ProtoSocket
     /// <summary>
     /// Represents a low-level protocol peer.
     /// </summary>
-    public abstract class ProtocolPeer<TFrame> : IDisposable
+    public abstract class ProtocolPeer<TFrame> : IProtocolPeer, IDisposable
         where TFrame : class
     {
         #region Fields

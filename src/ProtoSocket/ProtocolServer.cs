@@ -16,7 +16,7 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TConnection">The connection type.</typeparam>
     /// <typeparam name="TFrame">The frame type.</typeparam>
-    public abstract class ProtocolServer<TConnection, TFrame> : IDisposable 
+    public abstract class ProtocolServer<TConnection, TFrame> : IDisposable, IProtocolServer 
         where TConnection : ProtocolConnection<TConnection, TFrame>
         where TFrame : class
     {

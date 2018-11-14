@@ -9,7 +9,7 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TConnection">The connection type.</typeparam>
     /// <typeparam name="TFrame">The frame type.</typeparam>
-    public abstract class ProtocolConnection<TConnection, TFrame> : ProtocolPeer<TFrame>
+    public abstract class ProtocolConnection<TConnection, TFrame> : ProtocolPeer<TFrame>, IProtocolConnection
         where TConnection : ProtocolConnection<TConnection, TFrame>
         where TFrame : class
     {
@@ -31,6 +31,15 @@ namespace ProtoSocket
         /// Gets the server this connection was created on.
         /// </summary>
         public ProtocolServer<TConnection, TFrame> Server {
+            get {
+                return _server;
+            }
+        }
+
+        /// <summary>
+        /// Gets the server this connection was created on.
+        /// </summary>
+        IProtocolServer IProtocolConnection.Server {
             get {
                 return _server;
             }
