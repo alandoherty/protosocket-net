@@ -1,8 +1,9 @@
-﻿using System;
+﻿using Example.Minecraft.Net.Packets;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace Example.Minecraft
+namespace Example.Minecraft.Net
 {
     /// <summary>
     /// Represents a classic packet.

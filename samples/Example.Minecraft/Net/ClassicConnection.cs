@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using ProtoSocket;
 
-namespace Example.Minecraft
+namespace Example.Minecraft.Net
 {
     public class ClassicConnection : ProtocolConnection<ClassicConnection, ClassicPacket>
     {

@@ -11,7 +11,7 @@ namespace ProtoSocket
     /// Provides functionality for connecting to protocol servers.
     /// </summary>
     /// <typeparam name="TFrame">The frame type.</typeparam>
-    public abstract class ProtocolClient<TFrame> : ProtocolPeer<TFrame>, IProtocolClient
+    public class ProtocolClient<TFrame> : ProtocolPeer<TFrame>, IProtocolClient
         where TFrame : class
     {
         #region Properties

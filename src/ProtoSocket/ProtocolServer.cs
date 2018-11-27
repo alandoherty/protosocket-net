@@ -16,7 +16,7 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TConnection">The connection type.</typeparam>
     /// <typeparam name="TFrame">The frame type.</typeparam>
-    public abstract class ProtocolServer<TConnection, TFrame> : IDisposable, IProtocolServer 
+    public class ProtocolServer<TConnection, TFrame> : IDisposable, IProtocolServer 
         where TConnection : ProtocolConnection<TConnection, TFrame>
         where TFrame : class
     {
@@ -27,6 +27,7 @@ namespace ProtoSocket
         private List<TConnection> _connections = new List<TConnection>();
         private List<TConnection> _connectionsAnnounced = new List<TConnection>();
         private IProtocolCoder<TFrame> _coder;
+        private Uri _endpoint;
 
         private CancellationTokenSource _stopSource;
         #endregion
@@ -44,11 +45,23 @@ namespace ProtoSocket
         }
 
         /// <summary>
+        /// Gets the configured endpoint, if any.
+        /// </summary>
+        public Uri Endpoint {
+            get {
+                if (_endpoint == null)
+                    throw new InvalidOperationException("The server has not been configured");
+
+                return _endpoint;
+            }
+        }
+
+        /// <summary>
         /// Gets the number of connections.
         /// </summary>
         public int Count {
             get {
-                return 0;
+                return _connections.Count;
             }
         }
 
@@ -125,6 +138,7 @@ namespace ProtoSocket
             }
 
             // create listener
+            _endpoint = uri;
             _listener = new TcpListener(IPAddress.Parse(uri.Host), uri.Port);
         }
 

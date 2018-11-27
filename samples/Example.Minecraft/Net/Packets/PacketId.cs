@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Example.Minecraft
+namespace Example.Minecraft.Net.Packets
 {
     /// <summary>
     /// Defines the possible packet ID's.

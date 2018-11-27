@@ -1,11 +1,15 @@
-﻿using SixLabors.Fonts;
+﻿using Example.Minecraft.Net;
+using Example.Minecraft.Net.Packets;
+using ProtoSocket;
+using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
-using SixLabors.ImageSharp.Processing.Text;
 using SixLabors.Primitives;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -22,10 +26,20 @@ namespace Example.Minecraft
     {
         #region Fields
         private Dictionary<sbyte, Player> _players = new Dictionary<sbyte, Player>();
+        private ClassicServer _server = null;
+        private ConcurrentQueue<(Player, ClassicPacket)> _incomingPackets = new ConcurrentQueue<(Player, ClassicPacket)>();
+
         private byte[] _level = new byte[(256 * 256) * 64];
         #endregion
 
         #region Properties
+        /// <summary>
+        /// Gets or sets the tick rate (per second).
+        /// </summary>
+        public double TickRate {
+            get; set;
+        } = 20;
+
         public Player[] Players {
             get {
                 return _players.Values.ToArray();
@@ -120,13 +134,15 @@ namespace Example.Minecraft
         public void DrawText(string text) {
             // draw text
             Image<Rgba32> image = new Image<Rgba32>(128, 18);
+
+
             image.Mutate(delegate (IImageProcessingContext<Rgba32> ctx) {
                 ctx.DrawText(
                     new TextGraphicsOptions() {
                         VerticalAlignment = VerticalAlignment.Center,
                         HorizontalAlignment = HorizontalAlignment.Center
                     },
-                    text, SystemFonts.CreateFont("Courier New", 16), Rgba32.Black, new PointF(image.Width / 2, image.Height / 2)
+                    text, SystemFonts.CreateFont("Comic Sans MS", 16), Rgba32.Black, new PointF(image.Width / 2, image.Height / 2)
                 );
             });
 
@@ -149,7 +165,7 @@ namespace Example.Minecraft
                         VerticalAlignment = VerticalAlignment.Center,
                         HorizontalAlignment = HorizontalAlignment.Center
                     },
-                    text, SystemFonts.CreateFont("Courier New", 16), Rgba32.Black, new PointF(image.Width / 2, image.Height / 2)
+                    text, SystemFonts.CreateFont("Comic Sans MS", 16), Rgba32.Black, new PointF(image.Width / 2, image.Height / 2)
                 );
             });
 
@@ -182,7 +198,7 @@ namespace Example.Minecraft
             }
         }
 
-        public async void SetBlock(int x, int y, int z, byte blockId) {
+        public void SetBlock(int x, int y, int z, byte blockId) {
             // validate coordinates
             if (x < 0 || x > 256)
                 throw new ArgumentOutOfRangeException("The x-coordinate cannot be lower than zero or higher than 256");
@@ -208,7 +224,7 @@ namespace Example.Minecraft
                 setBlockWriter.WriteByte(blockId);
                 setBlockPacket.Payload = setBlockWriter.ToArray();
 
-                await p.Connection.SendAsync(setBlockPacket);
+                p.Connection.Queue(setBlockPacket);
             }
         }
 
@@ -311,13 +327,241 @@ namespace Example.Minecraft
             // remove
             _players.Remove(player.ID);
         }
+
+        /// <summary>
+        /// Runs the world game loop.
+        /// </summary>
+        /// <returns></returns>
+        public async Task RunAsync() {
+            // create a stopwatch to keep track of the tick times and also log we started
+            Stopwatch tickStopwatch = new Stopwatch();
+            Console.WriteLine($"Running Example.Minecraft at {_server.Endpoint}");
+
+            // get tick rate
+            int tickMs = (int)(1000 / TickRate);
+
+            while (true) {
+                tickStopwatch.Restart();
+
+                // process all inbound packets
+                (Player, ClassicPacket) incomingPacket = default((Player, ClassicPacket));
+
+                while (_incomingPackets.TryDequeue(out incomingPacket)) {
+                    ClassicPacket packet = incomingPacket.Item2;
+                    Player player = incomingPacket.Item1;
+
+                    switch (packet.Id) {
+                        case PacketId.PositionAngle:
+                            PacketReader posAngReader = new PacketReader(packet.Payload);
+                            posAngReader.ReadByte();
+
+                            // update position
+                            player.UpdatePosition(posAngReader.ReadShort() / 32.0f, posAngReader.ReadShort() / 32.0f, posAngReader.ReadShort() / 32.0f, (posAngReader.ReadByte() / 255.0f) * 360.0f, (posAngReader.ReadByte() / 255.0f) * 360.0f, false);
+                            break;
+
+                        case PacketId.Message:
+                            PacketReader msgReader = new PacketReader(packet.Payload);
+                            msgReader.ReadByte();
+                            string msgText = msgReader.ReadString();
+
+                            if (msgText.StartsWith('/')) {
+                                if (msgText.StartsWith("/clear", StringComparison.CurrentCultureIgnoreCase)) {
+                                    ClearText();
+                                } else if (msgText.StartsWith("/text ", StringComparison.CurrentCultureIgnoreCase)) {
+                                    ClearText();
+                                    DrawText(msgText.Substring(6));
+                                } else if (msgText.StartsWith("/texta ", StringComparison.CurrentCultureIgnoreCase)) {
+                                    ClearText();
+                                    DrawTextAnimated(msgText.Substring(7));
+                                } else if (msgText.StartsWith("/load", StringComparison.CurrentCultureIgnoreCase)) {
+                                    Load();
+                                } else if (msgText.StartsWith("/save", StringComparison.CurrentCultureIgnoreCase)) {
+                                    Save();
+                                } else {
+                                    player.Message(-1, "Unknown command");
+                                }
+                            } else {
+                                foreach (Player p in Players)
+                                    p.Message(p == player ? (sbyte)-1 : player.ID, string.Format("{0}: {1}", player.Name, msgText));
+                            }
+
+                            break;
+
+                        case PacketId.AskBlock:
+                            PacketReader askReader = new PacketReader(packet.Payload);
+                            int askX = askReader.ReadShort();
+                            int askY = askReader.ReadShort();
+                            int askZ = askReader.ReadShort();
+                            byte askMode = askReader.ReadByte();
+                            byte askBlockType = askReader.ReadByte();
+
+                            if (askMode == 0) {
+                                SetBlock(askX, askY, askZ, 0);
+                            } else {
+                                SetBlock(askX, askY, askZ, askBlockType);
+                            }
+                            break;
+
+                        default:
+                            Console.WriteLine("Unknown packet: {0}", packet.Id.ToString());
+                            break;
+                    }
+                }
+
+                // send all outbound packets
+                List<Task> sendTasks = new List<Task>();
+
+                foreach (ClassicConnection connection in _server.Connections) {
+                    sendTasks.Add(connection.SendAsync());
+                }
+                await Task.WhenAll(sendTasks);
+
+                // wait up to tick rate
+                if (tickStopwatch.ElapsedMilliseconds > tickMs)
+                    Console.WriteLine($"Server behind, took {tickStopwatch.ElapsedMilliseconds - tickMs}ms longer to process tick");
+                else
+                    await Task.Delay(tickMs - (int)tickStopwatch.ElapsedMilliseconds);
+            }
+        }
+        #endregion
+
+        #region Event Handlers
+        private void OnDisconnected(object sender, PeerDisconnectedEventArgs<ClassicPacket> e) {
+            // find player
+            Player player = FindPlayer((ClassicConnection)e.Peer);
+
+            if (player == null)
+                return;
+
+            // remove player
+            RemovePlayer(player);
+
+            foreach (Player p in Players) {
+                p.Message(-1, player.Name + " disconnected");
+            }
+
+            Console.WriteLine(e.Peer.RemoteEndPoint + " disconnected due to " + e.Peer.CloseReason);
+        }
+
+        private async void OnConnected(object sender, PeerConnectedEventArgs<ClassicPacket> e) {
+            // receive identification
+            ClassicPacket packet = await e.Peer.ReceiveAsync();
+
+            if (packet.Id != PacketId.Identification) {
+                e.Peer.Dispose();
+                return;
+            }
+
+            // read packet
+            PacketReader reader = new PacketReader(packet.Payload);
+            string username = null;
+
+            try {
+                reader.ReadByte();
+                username = reader.ReadString();
+            } catch (Exception) {
+                e.Peer.Dispose();
+                return;
+            }
+
+            // respond
+            ClassicPacket response = new ClassicPacket();
+            response.Id = PacketId.Identification;
+
+            PacketWriter writer = new PacketWriter();
+            writer.WriteByte(0x07);
+            writer.WriteString("Example.Minecraft");
+            writer.WriteString("An example protocol server for Minecraft Classic");
+            writer.WriteByte(0x00);
+            response.Payload = writer.ToArray();
+
+            await e.Peer.SendAsync(response);
+
+            // check max players
+            sbyte playerId = NextPlayerID();
+
+            // create player
+            Player player = new Player(this, NextPlayerID(), (ClassicConnection)e.Peer, username);
+
+            if (playerId == -1) {
+                player.Kick("Maximum players reached");
+                return;
+            }
+
+            // set player
+            e.Peer.Userdata = player;
+
+            // get level
+            byte[] compressedLevel = GetCompressedLevel();
+
+            // send initialize packet
+            ClassicPacket initPacket = new ClassicPacket();
+            initPacket.Id = PacketId.LevelInitialize;
+            initPacket.Payload = new byte[0];
+            await e.Peer.SendAsync(initPacket);
+
+            // build the data
+            int bytesSent = 0;
+
+            while (bytesSent < compressedLevel.Length) {
+                byte[] levelChunk = new byte[1024];
+                int chunkSize = Math.Min(1024, compressedLevel.Length - bytesSent);
+                Buffer.BlockCopy(compressedLevel, bytesSent, levelChunk, 0, chunkSize);
+
+                bytesSent += chunkSize;
+
+                // send data apcket
+                ClassicPacket dataPacket = new ClassicPacket();
+                dataPacket.Id = PacketId.LevelDataChunk;
+
+                PacketWriter dataWriter = new PacketWriter();
+                dataWriter.WriteShort((short)chunkSize);
+                dataWriter.WriteByteArray(levelChunk);
+                dataWriter.WriteByte((byte)(((float)bytesSent / compressedLevel.Length) * 100.0f));
+                dataPacket.Payload = dataWriter.ToArray();
+
+                await e.Peer.SendAsync(dataPacket);
+            }
+
+            // send finish packet
+            ClassicPacket finishPacket = new ClassicPacket();
+            finishPacket.Id = PacketId.LevelFinalize;
+
+            PacketWriter finishWriter = new PacketWriter();
+            finishWriter.WriteShort((short)Width);
+            finishWriter.WriteShort((short)Height);
+            finishWriter.WriteShort((short)Depth);
+            finishPacket.Payload = finishWriter.ToArray();
+            await e.Peer.SendAsync(finishPacket);
+
+            e.Peer.Received += (o, e2) => _incomingPackets.Enqueue((((Player)e2.Peer.Userdata), e2.Frame));
+
+            // add player and spawn
+            AddPlayer(player);
+            player.Spawn();
+
+            // announce
+            foreach (Player p in Players) {
+                if (p != player)
+                    p.Message(-1, player.Name + " connected");
+            }
+
+            // spawn existing players
+            foreach (Player p in Players) {
+                p.Spawn(player);
+            }
+        }
         #endregion
 
         #region Constructors
         /// <summary>
         /// Creates a new world.
         /// </summary>
-        public World() {
+        public World(ClassicServer server) {
+            _server = server;
+            _server.Disconnected += OnDisconnected;
+            _server.Connected += OnConnected;
+
             // add grass layer
             for (int x = 0; x < 256; x++) {
                 for (int z = 0; z < 256; z++) {

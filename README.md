@@ -32,9 +32,40 @@ Install-Package ProtoSocket
 
 You can find two examples inside the project source code. An implementation of a Minecraft Classic server (very basic), and a basic binary chat server.
 
-In the Minecraft example, you can type `/text Moi moi or /texta Moi moi` for 3D text to appear in your world.
+In the Minecraft example, you can type `/text Moi moi or /texta Moi moi` for 3D text to appear in your world. 
 
 ![Example](docs/img/example_minecraft.png)
+
+## Usage
+
+Overall the library makes use of the concept of peers, which can represent a inbound connection or an outgoing client connection. You can use `Peer.Side` to determine if a peer is a client or server connection. The library provides three ways of receiving packets from the opposing peer, it is safe to use all at once if your application requires.
+
+- `IObserver<TFrame>` subscriptions
+- `Peer.Received` event
+- `ReceiveAsync` tasks
+
+When a `TFrame` has been decoded by your `IProtocolCoder` implementation, the peer needs to decide which receiever to inform. It prioritises responses to `RequestAsync` calls, followed by `ReceiveAsync` requests, and will not trigger the `Received` event or inform any subscribers if a frame is pulled from the peer this way.
+
+For the `Received` event, the event handler will always be called when no `ReceiveAsync` operation is pending. Optionally the `ReceivedEventArgs.Handled` property may be set to true to indicate that the frame should not be passed to any subscriptions.
+
+Finally if all other handlers have been called without conflict, any `IObserver<TFrame>` subscriptions will be called.
+
+### Queueing
+
+In many scenarios creating an asyncronous operation and waiting for every packet to be sent is not ideal, for these use cases you can use the `ProtocolPeer.Queue` and `ProtocolPeer.QueueAsync` methods.
+
+Queueing a packet does not provide any guarentee it will be sent in a timely fashion, it is up to you to call `ProtocolPeer.SendAsync` for any queued packets to be sent. If you want to queue packets but need to confirm or wait until they have been sent, you can use the `ProtocolPeer.QueueAsync` method.
+
+This allows you to batch multiple frames together while still waiting until they are sent.
+
+```csharp
+Task message1 = peer.QueueAsync(new ChatMessage() { Text = "I like books" });
+Task message2 = peer.QueueAsync(new ChatMessage() { Text = "I like books alot" });
+Task message3 = peer.QueueAsync(new ChatMessage() { Text = "I like eBooks too" });
+
+// you must call peer.SendAsync for these messages to be sent
+await Task.WhenAll(message1, message2, message3);
+``` 
 
 ## Contributing
 

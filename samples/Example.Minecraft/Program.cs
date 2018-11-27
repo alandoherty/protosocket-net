@@ -1,5 +1,9 @@
-﻿using System;
+﻿using Example.Minecraft.Net;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Example.Minecraft
 {
@@ -7,15 +11,16 @@ namespace Example.Minecraft
     {
         static void Main(string[] args)
         {
+            // create the protosocket server
+            ClassicServer server = new ClassicServer(new Uri("tcp://0.0.0.0:25565"));
+
             // create world
-            World world = new World();
+            World world = new World(server);
+            world.TickRate = 20;
 
-            // create server and start
-            ClassicServer server = new ClassicServer(world, new Uri("tcp://0.0.0.0:25565"));
+            // start server and run the game tick loop
             server.Start();
-
-            // wait forever
-            while (true) Thread.Sleep(1000);
+            world.RunAsync().Wait();
         }
     }
 }

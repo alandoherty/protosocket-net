@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -8,14 +9,13 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Threading.Tasks.Dataflow;
 
 namespace ProtoSocket
 {
     /// <summary>
     /// Represents a low-level protocol peer.
     /// </summary>
-    public abstract class ProtocolPeer<TFrame> : IProtocolPeer, IDisposable
+    public abstract class ProtocolPeer<TFrame> : IProtocolPeer, IObservable<TFrame>, IDisposable
         where TFrame : class
     {
         #region Fields
@@ -33,17 +33,19 @@ namespace ProtoSocket
         private int _disposed;
         internal CancellationTokenSource _disposeSource = new CancellationTokenSource();
         internal CancellationTokenSource _readCancelSource = new CancellationTokenSource();
-        private BufferBlock<TFrame> _inBuffer = null;
-        private BufferBlock<QueuedFrame> _outBuffer = null;
-        private SemaphoreSlim _outBufferLock = new SemaphoreSlim(1, 1);
 
         private Dictionary<object, CorrelatedWait> _correlations = new Dictionary<object, CorrelatedWait>();
-        private List<Tuple<TaskCompletionSource<TFrame>, Predicate<TFrame>>> _correlationPredicates = new List<Tuple<TaskCompletionSource<TFrame>, Predicate<TFrame>>>();
 
         private long _statFramesIn;
         private long _statFramesOut;
 
-        private object _sendLock = new object();
+        private Queue<QueuedFrame> _sendQueue = new Queue<QueuedFrame>();
+        private SemaphoreSlim _sendSemaphore = new SemaphoreSlim(1, 1);
+
+        private Queue<TFrame> _receiveQueue = new Queue<TFrame>();
+        private TaskCompletionSource<TFrame> _receiveSource = null;
+
+        private List<Subscription> _subscriptions = new List<Subscription>();
         #endregion
 
         #region Properties
@@ -187,133 +189,249 @@ namespace ProtoSocket
         /// Invoke the received event.
         /// </summary>
         /// <param name="e">The event arguments.</param>
-        protected virtual void OnReceived(PeerReceivedEventArgs<TFrame> e) {
-            Received?.Invoke(this, e);
+        /// <returns>If any delegates were invoked.</returns>
+        protected virtual bool OnReceived(PeerReceivedEventArgs<TFrame> e) {
+            if (Received == null)
+                return false;
+
+            Received.Invoke(this, e);
+            return true;
         }
         #endregion
 
-        #region Queued IO
-        /*
+        #region Queued Sending
         /// <summary>
-        /// Queues sending a frame, it may be sent eventually or not at all.
-        /// The task will complete once the frame has been sent successfully.
+        /// Queues the frames to be sent, this will happen on the next call to <see cref="SendAsync(CancellationToken)"/>. 
+        /// </summary>
+        /// <param name="frames">The frames.</param>
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
+        /// <returns>The total number of queued frames.</returns>
+        public int Queue(IEnumerable<TFrame> frames) {
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
+                throw new InvalidOperationException("The peer is not ready to queue packets");
+
+            // enqueue all frames atomically
+            lock (_sendQueue) {
+                foreach (TFrame frame in frames)
+                    _sendQueue.Enqueue(new QueuedFrame() { Frame = frame, TaskSource = null });
+
+                return _sendQueue.Count;
+            }
+        }
+
+        /// <summary>
+        /// Queues the frames to be sent, this will happen on the next call to <see cref="SendAsync(CancellationToken)"/>. 
+        /// </summary>
+        /// <param name="frames">The frames.</param>
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
+        /// <returns>The total number of queued frames.</returns>
+        public int Queue(params TFrame[] frames) {
+            return Queue(frames);
+        }
+
+        /// <summary>
+        /// Queues the frame to be sent, this will happen on the next call to <see cref="SendAsync(CancellationToken)"/>.
         /// </summary>
         /// <param name="frame">The frame.</param>
-        /// <param name="token">The cancellation token.</param>
-        /// <returns></returns>
-        private async Task QueueSendAsync(TFrame frame, CancellationToken token) {
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
+        /// <returns>The total number of queued frames.</returns>
+        public int Queue(TFrame frame) {
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
+                throw new InvalidOperationException("The peer is not ready to queue packets");
 
+            // enqueue all frames atomically
+            lock (_sendQueue) {
+                _sendQueue.Enqueue(new QueuedFrame() { Frame = frame, TaskSource = null });
+                return _sendQueue.Count;
+            }
         }
-        */
+
         /// <summary>
-        /// Processes any queued sends.
+        /// Queues the frame to be sent and returns a task which will complete after sending.
+        /// The frame will be sent on the next call to <see cref="SendAsync(CancellationToken)"/>.
         /// </summary>
-        /// <param name="token">The cancellation token.</param>
-        /// <returns></returns>
-        private Task ProcessQueueAsync(CancellationToken token) {
-            while(_outBuffer.TryReceive(out QueuedFrame frame)) {
+        /// <param name="frame">The frame.</param>
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
+        /// <returns>A task which will complete once the frame is sent.</returns>
+        public Task QueueAsync(TFrame frame) {
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
+                throw new InvalidOperationException("The peer is not ready to queue packets");
+
+            // create completion source
+            TaskCompletionSource<bool> tcs = new TaskCompletionSource<bool>();
+
+            // enqueue
+            lock (_sendQueue) {
+                _sendQueue.Enqueue(new QueuedFrame() { Frame = frame, TaskSource = tcs });
             }
 
-            return Task.FromResult(true);
+            return tcs.Task;
         }
         #endregion
 
         #region Sending
         /// <summary>
-        /// Sends a single frame to the opposing peer asyncronously.
+        /// Sends all queued frames.
+        /// You MUST obtain the send semaphore before calling this method.
         /// </summary>
-        /// <param name="frame">The frame.</param>
-        /// <param name="token">The cancellation token.</param>
         /// <returns></returns>
-        private async Task RawSendAsync(TFrame frame, CancellationToken token) {
-            // generate a linked cancellation if necessary
-            CancellationToken cancelToken = _disposeSource.Token;
-            CancellationTokenSource cancelTokenLinked = null;
+        private async Task<int> SendAllAsync() {
+            // get queued packets, we create the list with the non-thread safe count in hopes it's accurate after
+            // we obtain the lock, worst case is we allocated one too much or too little and we get a small performance penalty
+            List<QueuedFrame> queuedFrames = new List<QueuedFrame>(_sendQueue.Count);
 
-            if (token != CancellationToken.None) {
-                cancelTokenLinked = CancellationTokenSource.CreateLinkedTokenSource(token, _disposeSource.Token);
-                cancelToken = cancelTokenLinked.Token;
+            lock (_sendQueue) {
+                while (_sendQueue.Count > 0)
+                    queuedFrames.Add(_sendQueue.Dequeue());
             }
+
+            // if no frames are available return zero, shouldn't happen though
+            if (queuedFrames.Count == 0)
+                return 0;
 
             // write to buffer
             try {
-                await _coder.WriteAsync(_dataStream, frame, new CoderContext<TFrame>(this), _disposeSource.Token).ConfigureAwait(false);
-                await _dataStream.FlushAsync().ConfigureAwait(false);
+                foreach (QueuedFrame queuedFrame in queuedFrames) {
+                    // write to underlying stream
+                    await _coder.WriteAsync(_dataStream, queuedFrame.Frame, new CoderContext<TFrame>(this), _disposeSource.Token).ConfigureAwait(false);
 
-                if (cancelTokenLinked != null)
-                    cancelTokenLinked.Dispose();
+                    // complete task source if available
+                    if (queuedFrame.TaskSource != null)
+                        queuedFrame.TaskSource.TrySetResult(true);
+                }
+
+                // flush underlying stream
+                await _dataStream.FlushAsync().ConfigureAwait(false);
 
                 // increment stat
                 _statFramesOut++;
             } catch(Exception) {
                 _closeReason = "Failed to encode frame";
-                ForceClose();
+                Abort();
                 throw;
+            }
+
+            return queuedFrames.Count;
+        }
+
+        /// <summary>
+        /// Sends all queued frames asyncronously.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting, disconnected or connecting.</exception>
+        /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
+        /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
+        /// <returns>The number of sent frames.</returns>
+        public async Task<int> SendAsync(CancellationToken cancellationToken = default(CancellationToken)) {
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_client == null)
+                throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting || _state == ProtocolState.Connecting)
+                throw new InvalidOperationException("The peer is not ready to send frames");
+
+            // wait for the send semaphore to become available, if cancelled we let the exception
+            // bubble up since nothing has happened yet
+            await _sendSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try {
+                // last call for cancellation
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // send all waiting frames
+                return await SendAllAsync().ConfigureAwait(false);
+            } finally {
+                _sendSemaphore.Release();
             }
         }
 
         /// <summary>
-        /// Sends the frame asyncronously.
+        /// Sends a frame and all other queued frames asyncronously.
         /// </summary>
         /// <param name="frame">The frame.</param>
-        /// <returns></returns>
-        public Task SendAsync(TFrame frame) {
-            return SendAsync(frame, CancellationToken.None);
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting, disconnected or connecting.</exception>
+        /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
+        /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
+        /// <returns>The number of sent frames.</returns>
+        public async Task<int> SendAsync(TFrame frame, CancellationToken cancellationToken = default(CancellationToken)) {
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_client == null)
+                throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting || _state == ProtocolState.Connecting)
+                throw new InvalidOperationException("The peer is not ready to send frames");
+
+            // wait for the send semaphore to become available, if cancelled we let the exception
+            // bubble up since nothing has happened yet
+            await _sendSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try {
+                // last call for cancellation
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // add to queue, we don't do QueueAsync since the following SendAsync call guarentees it gets sent
+                Queue(frame);
+
+                // send all queued frames
+                return await SendAllAsync().ConfigureAwait(false);
+            } finally {
+                _sendSemaphore.Release();
+            }
         }
 
         /// <summary>
-        /// Sends the frames asyncronously.
+        /// Sends many frames and any other queued frames asyncronously.
         /// </summary>
         /// <param name="frames">The frames.</param>
-        /// <returns></returns>
-        public Task SendAsync(IEnumerable<TFrame> frames) {
-            return SendAsync(frames, CancellationToken.None);
-        }
-
-        /// <summary>
-        /// Sends many frames asyncronously.
-        /// </summary>
-        /// <param name="frame">The frame.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns></returns>
-        public virtual Task SendAsync(TFrame frame, CancellationToken cancellationToken) {
-            if (_client == null)
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting, disconnected or connecting.</exception>
+        /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
+        /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
+        /// <returns>The number of sent frames.</returns>
+        public async Task<int> SendAsync(IEnumerable<TFrame> frames, CancellationToken cancellationToken = default(CancellationToken)) {
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting || _state == ProtocolState.Connecting)
+                throw new InvalidOperationException("The peer is not ready to send frames");
 
-            // try and enter the send lock
-            //bool canLock = false;
-            //Monitor.TryEnter(_sendLock, ref canLock);
+            // wait for the send semaphore to become available, if cancelled we let the exception
+            // bubble up since nothing has happened yet
+            await _sendSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-            // get combined cancellation token
-            if (cancellationToken == CancellationToken.None)
-                cancellationToken = _disposeSource.Token;
-            else
-                cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeSource.Token).Token;
+            try {
+                // last call for cancellation
+                cancellationToken.ThrowIfCancellationRequested();
 
-            // if we can't enter the send lock we need to queue up
-            //if (canLock) {
-                //return QueueSendAsync(frame, cancellationToken);
-            //} else {
-                return RawSendAsync(frame, cancellationToken);
-            //}
-        }
+                // add to queue, we don't do QueueAsync since the following SendAsync call guarentees it gets sent
+                Queue(frames);
 
-        /// <summary>
-        /// Sends many frames asyncronously.
-        /// </summary>
-        /// <param name="frames">The frame array.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns></returns>
-        public virtual async Task SendAsync(IEnumerable<TFrame> frames, CancellationToken cancellationToken) {
-            // get combined cancellation token
-            if (cancellationToken == CancellationToken.None)
-                cancellationToken = _disposeSource.Token;
-            else
-                cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeSource.Token).Token;
-
-            //TODO: more efficient
-            foreach (TFrame frame in frames)
-                await RawSendAsync(frame, cancellationToken).ConfigureAwait(false);
+                // send all queued frames
+                return await SendAllAsync().ConfigureAwait(false);
+            } finally {
+                _sendSemaphore.Release();
+            }
         }
         #endregion
 
@@ -321,96 +439,67 @@ namespace ProtoSocket
         /// <summary>
         /// Receives a single frame asyncronously.
         /// </summary>
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
+        /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
+        /// <exception cref="InvalidOperationException">If multiple concurrent receive calls are detected.</exception>
+        /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns></returns>
-        public Task<TFrame> ReceiveAsync() {
-            return _inBuffer.ReceiveAsync(_disposeSource.Token);
+        public Task<TFrame> ReceiveAsync(CancellationToken cancellationToken = default(CancellationToken)) {
+            return ReceiveAsync(Timeout.InfiniteTimeSpan, cancellationToken);
         }
 
         /// <summary>
         /// Receives a single frame asyncronously.
         /// </summary>
-        /// <param name="timeout"></param>
-        /// <returns></returns>
-        public Task<TFrame> ReceiveAsync(TimeSpan timeout) {
-            return _inBuffer.ReceiveAsync(timeout, _disposeSource.Token);
-        }
-
-        /// <summary>
-        /// Tries to receive a frame from the connection, not guarenteed to respond if another ReceiveAsync call is in process.
-        /// </summary>
-        /// <param name="filter">The filter.</param>
+        /// <param name="timeout">The optional timeout.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns></returns>
-        private async Task<TFrame> TryReceiveAsync(Predicate<TFrame> filter, CancellationToken cancellationToken) {
-            while (true) {
-                // throw if requested
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // get output
-                await _inBuffer.OutputAvailableAsync(cancellationToken).ConfigureAwait(false);
-
-                // wait for both
-                if (_inBuffer.TryReceive(filter, out TFrame frame))
-                    return frame;
-            }
-        }
-
-        /// <summary>
-        /// Receives a single frame asyncronously that matches the predicate.
-        /// </summary>
-        /// <param name="filter">The filter predicate.</param>
-        /// <param name="timeout">The timeout.</param>
-        /// <returns></returns>
-        public async Task<TFrame> ReceiveAsync(Predicate<TFrame> filter, TimeSpan timeout) {
-            if (_client == null)
+        /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
+        /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
+        /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
+        /// <exception cref="TimeoutException">If the operation has timed out.</exception>
+        /// <returns>The received frame.</returns>
+        public async Task<TFrame> ReceiveAsync(TimeSpan timeout, CancellationToken cancellationToken = default(CancellationToken)) {
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
+                throw new InvalidOperationException("The peer is not ready to receive frames");
 
-            // create timeout task
-            Task timeoutTask = Task.Delay(timeout);
-
-            while (true) {
-                // create completion and cancellation for predicate
-                TaskCompletionSource<TFrame> predicateTaskSource = new TaskCompletionSource<TFrame>();
-                CancellationTokenSource predicateCancellation = new CancellationTokenSource();
-                var predicateTuple = new Tuple<TaskCompletionSource<TFrame>, Predicate<TFrame>>(predicateTaskSource, filter);
-
-                // add to list
-                lock (_correlationPredicates) {
-                    _correlationPredicates.Add(predicateTuple);
+            // check if anything is in the queue, try and lock and get it if so
+            if (_receiveQueue.Count > 0) {
+                lock (_receiveQueue) {
+                    if (_receiveQueue.Count > 0) {
+                        return _receiveQueue.Dequeue();
+                    }
                 }
+            }
 
-                // try and receive
-                Task<TFrame> immediateTask = TryReceiveAsync(filter, predicateCancellation.Token);
+            // create source
+            TaskCompletionSource<TFrame> completionSource = new TaskCompletionSource<TFrame>();
 
-                // wait for both
-                Task firstTask = await Task.WhenAny(predicateTaskSource.Task, immediateTask, timeoutTask).ConfigureAwait(false);
+            if (Interlocked.CompareExchange(ref _receiveSource, completionSource, null) != null)
+                throw new InvalidOperationException("A receive call is already in progress");
 
-                if (firstTask == timeoutTask) {
-                    // cancel predicate task
-                    predicateCancellation.Cancel();
+            try {
+                if (timeout == Timeout.InfiniteTimeSpan) {
+                    // if we have an infinite timeout just await the completion source
+                    return await completionSource.Task.ConfigureAwait(false);
+                } else {
+                    // create timeout delay
+                    Task timeoutDelay = Task.Delay(timeout);
+                    Task completedTask = await Task.WhenAny(timeoutDelay, completionSource.Task).ConfigureAwait(false);
 
-                    // remove from list
-                    lock (_correlationPredicates)
-                        _correlationPredicates.Remove(predicateTuple);
-
-                    // throw timeout
-                    throw new TimeoutException("The receive timed out before the predicate could match");
-                } else if (firstTask == immediateTask) {
-                    // remove from list
-                    lock (_correlationPredicates)
-                        _correlationPredicates.Remove(predicateTuple);
-
-                    return immediateTask.Result;
-                } else if (firstTask == predicateTaskSource.Task) {
-                    // cancel predicate task
-                    predicateCancellation.Cancel();
-
-                    // remove from list
-                    lock (_correlationPredicates)
-                        _correlationPredicates.Remove(predicateTuple);
-
-                    return predicateTaskSource.Task.Result;
+                    if (completedTask == timeoutDelay)
+                        throw new TimeoutException("The receive operation has timed out");
+                    else
+                        return ((Task<TFrame>)completedTask).Result;
                 }
+            } finally {
+                _receiveSource = null;
             }
         }
         #endregion
@@ -477,8 +566,9 @@ namespace ProtoSocket
         /// Sends the frame and waits for the response, the frame must be correlatable.
         /// </summary>
         /// <param name="frame">The frame.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns></returns>
-        public Task<TFrame> RequestAsync(TFrame frame) {
+        public Task<TFrame> RequestAsync(TFrame frame, CancellationToken cancellationToken = default(CancellationToken)) {
             return RequestAsync(frame, TimeSpan.Zero, CancellationToken.None);
         }
 
@@ -487,29 +577,9 @@ namespace ProtoSocket
         /// </summary>
         /// <param name="frame">The frame.</param>
         /// <param name="timeout">The timeout.</param>
-        /// <returns></returns>
-        public Task<TFrame> RequestAsync(TFrame frame, TimeSpan timeout) {
-            return RequestAsync(frame, timeout, CancellationToken.None);
-        }
-
-        /// <summary>
-        /// Sends the frame and waits for the response, the frame must be correlatable.
-        /// </summary>
-        /// <param name="frame">The frame.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns></returns>
-        public Task<TFrame> RequestAsync(TFrame frame, CancellationToken cancellationToken) {
-            return RequestAsync(frame, TimeSpan.Zero, cancellationToken);
-        }
-
-        /// <summary>
-        /// Sends the frame and waits for the response, the frame must be correlatable.
-        /// </summary>
-        /// <param name="frame">The frame.</param>
-        /// <param name="timeout">The timeout.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns></returns>
-        public virtual async Task<TFrame> RequestAsync(TFrame frame, TimeSpan timeout, CancellationToken cancellationToken) {
+        public virtual async Task<TFrame> RequestAsync(TFrame frame, TimeSpan timeout, CancellationToken cancellationToken = default(CancellationToken)) {
             if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
 
@@ -563,9 +633,6 @@ namespace ProtoSocket
             else if (_state != ProtocolState.Connected)
                 throw new InvalidOperationException("The peer must be connected to upgrade");
 
-            // cancel pending read
-            _readCancelSource.Cancel();
-
             // update state
             OnStateChanged(new PeerStateChangedEventArgs<TFrame>() {
                 OldState = _state,
@@ -579,7 +646,7 @@ namespace ProtoSocket
                 _dataStream = await upgrader.UpgradeAsync(_dataStream, this);
             } catch (Exception) {
                 _closeReason = "Failed to upgrade peer stream";
-                ForceClose();
+                Abort();
                 throw;
             }
 
@@ -600,7 +667,7 @@ namespace ProtoSocket
         /// Forcibly close the peer, should be called when connection is lost.
         /// We have no time to send out any queued frames.
         /// </summary>
-        private void ForceClose() {
+        private void Abort() {
             if (_state == ProtocolState.Disconnected)
                 return;
 
@@ -610,7 +677,7 @@ namespace ProtoSocket
                 NewState = ProtocolState.Disconnected
             });
 
-            _state = ProtocolState.Disconnecting;
+            _state = ProtocolState.Disconnected;
 
             // dispose
             Dispose();
@@ -620,6 +687,11 @@ namespace ProtoSocket
         /// Reads the next frame.
         /// </summary>
         private async void ReadLoop() {
+            IStreamCoder<TFrame> coder = (IStreamCoder<TFrame>)_coder;
+            PeerReceivedEventArgs<TFrame> eventArgs = new PeerReceivedEventArgs<TFrame>() {
+                Peer = this
+            };
+
             while (_disposed == 0) {
                 try {
                     // read frame
@@ -627,7 +699,7 @@ namespace ProtoSocket
 
                     try {
                         using (CancellationTokenSource cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(_disposeSource.Token, _readCancelSource.Token)) {
-                            frame = await _coder.ReadAsync(_dataStream, new CoderContext<TFrame>(this), _disposeSource.Token);
+                            frame = await coder.ReadAsync(_dataStream, new CoderContext<TFrame>(this), _disposeSource.Token);
                         }
                     } catch (OperationCanceledException ex) {
                         if (ex.CancellationToken == _disposeSource.Token) {
@@ -644,7 +716,7 @@ namespace ProtoSocket
                     // if the frame is null we've reached end of stream
                     if (frame == null) {
                         _closeReason = "End of stream";
-                        ForceClose();
+                        Abort();
                         return;
                     }
 
@@ -677,35 +749,41 @@ namespace ProtoSocket
                         }
                     }
 
-                    // predicate correlations
-                    if (_correlationPredicates.Count > 0) {
-                        lock(_correlationPredicates) {
-                            // look for the tuple
-                            Tuple<TaskCompletionSource<TFrame>, Predicate<TFrame>> foundTuple = null;
+                    // check if a receive source is pending and try and set its result
+                    TaskCompletionSource<TFrame> receiveSource = _receiveSource;
 
-                            foreach(var tuple in _correlationPredicates) {
-                                if (tuple.Item2(frame)) {
-                                    foundTuple = tuple;
-                                    tuple.Item1.TrySetResult(frame);
-                                    break;
-                                }
-                            }
-
-                            // remove
-                            _correlationPredicates.Remove(foundTuple);
-                        }
+                    if (receiveSource != null) {
+                        // if successful dont notify event handler or subscribers
+                        if (receiveSource.TrySetResult(frame))
+                            continue;
                     }
+
+                    // if the frame was observed, if not we know to add it to the queue
+                    bool wasObserved = false;
 
                     // call event
-                    PeerReceivedEventArgs<TFrame> e = new PeerReceivedEventArgs<TFrame>() { Peer = this, Frame = frame };
-                    OnReceived(e);
+                    eventArgs.Handled = false;
+                    eventArgs.Frame = frame;
 
-                    if (!e.Handled) {
-                        // post frame
-                        await _inBuffer.SendAsync(frame);
+                    if (OnReceived(eventArgs))
+                        wasObserved = true;
+
+                    // if handled don't notify subscribers
+                    if (eventArgs.Handled)
+                        continue;
+
+                    // notify subscribers
+                    if (Notify(frame))
+                        wasObserved = true;
+
+                    // if the frame wasn't observed by anything add it to the queue
+                    if (!wasObserved) {
+                        lock (_receiveQueue) {
+                            _receiveQueue.Enqueue(frame);
+                        }
                     }
                 } catch (Exception) {
-                    ForceClose();
+                    Abort();
                     return;
                 }
             }
@@ -736,10 +814,6 @@ namespace ProtoSocket
                 NewState = ProtocolState.Connecting
             });
             _state = ProtocolState.Connecting;
-
-            // setup buffers
-            _inBuffer = new BufferBlock<TFrame>();
-            _outBuffer = new BufferBlock<QueuedFrame>();
 
             // set streams
             _netStream = client.GetStream();
@@ -782,8 +856,30 @@ namespace ProtoSocket
             if (Interlocked.Exchange(ref _disposed, 1) == 1)
                 return;
 
-            // close reason
+            // set close reason to disposed if none is available
             Interlocked.CompareExchange(ref _closeReason, "Disposed", null);
+
+            // create disposed exception
+            ObjectDisposedException objectDisposedException = new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), $"The peer has been closed: {_closeReason}");
+
+            // mark receive as disposed, we retrieve it first because other threads could set it to null
+            // inbetween our accessing it
+            TaskCompletionSource<TFrame> receiveSource = _receiveSource;
+
+            if (receiveSource != null)
+                receiveSource.TrySetException(objectDisposedException);
+
+            // mark any queued frames that have task completion sources as faulted
+            if (_sendQueue.Count > 0) {
+                while(_sendQueue.Count > 0) {
+                    // dequeue a frame
+                    QueuedFrame queuedFrame = _sendQueue.Dequeue();
+
+                    // check if it has a completion source and mark it with the exception
+                    if (queuedFrame.TaskSource != null)
+                        queuedFrame.TaskSource.TrySetException(objectDisposedException);
+                }
+            }
 
             // cancel
             try {
@@ -796,39 +892,17 @@ namespace ProtoSocket
                     _client.Dispose();
             } catch (Exception) { }
 
-            // complete input buffer
-            try {
-                if (_inBuffer != null) {
-                    _inBuffer.TryReceiveAll(out IList<TFrame> inList);
-                    _inBuffer.Complete();
-                }
-
-                if (_outBuffer != null) {
-                    _outBuffer.TryReceiveAll(out IList<QueuedFrame> outList);
-                    _outBuffer.Complete();
-                }
-            } catch (Exception ex) {
-                Debug.WriteLine($"failed to cleanup in/out buffers: {ex.ToString()}");
-            }
-
-            // cleanup out buffer lock
-            try {
-                _outBufferLock.Dispose();
-            } catch(Exception ex) {
-                Debug.WriteLine($"failed to cleanup out buffer lock: {ex.ToString()}");
-            }
-
             // disconnected event
             if (_client != null)
                 OnDisconnected(new PeerDisconnectedEventArgs<TFrame>() { Peer = this });
         }
 
         /// <summary>
-        /// Closes the peer, waiting for all outbound messages to be sent.
+        /// Closes the peer, giving a best effort for all outbound messages to be sent.
         /// </summary>
-        /// <param name="reason">The close reaosn.</param>
+        /// <param name="reason">The close reason.</param>
         /// <returns></returns>
-        public async Task CloseAsync(string reason="Unspecified") {
+        public async Task CloseAsync(string reason="User requested") {
             if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
 
@@ -841,15 +915,84 @@ namespace ProtoSocket
                 OldState = _state,
                 NewState = ProtocolState.Disconnecting
             });
-
+            
+            // set as disconnecting
             _state = ProtocolState.Disconnecting;
             _closeReason = reason;
 
-            // process queue
-            await ProcessQueueAsync(CancellationToken.None);
+            // try and send all if we can
+            try {
+                if (await _sendSemaphore.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false)) {
+                    try {
+                        await SendAllAsync().ConfigureAwait(false);
+                    } finally {
+                        _sendSemaphore.Release();
+                    }
+                }
+            } catch (Exception) { }
 
             // close
             Dispose();
+        }
+
+        /// <summary>
+        /// Notifies subscribers of an incoming frame.
+        /// </summary>
+        /// <param name="frame">The frame.</param>
+        /// <returns>If the frame was delivered to subscribers.</returns>
+        private bool Notify(TFrame frame) {
+            bool observed = false;
+
+            lock(_subscriptions) {
+                foreach(Subscription subscription in _subscriptions) {
+                    if (subscription.Predicate == null) {
+                        observed = true;
+                        subscription.Observer.OnNext(frame);
+                    } else {
+                        if (subscription.Predicate(frame)) {
+                            observed = true;
+                            subscription.Observer.OnNext(frame);
+                        }
+                    }
+                }
+            }
+
+            return observed;
+        }
+
+        /// <summary>
+        /// Subscribes the observer to this peer.
+        /// </summary>
+        /// <param name="observer">The observer.</param>
+        /// <returns>A disposable wrapper for the subscription.</returns>
+        public IDisposable Subscribe(IObserver<TFrame> observer) {
+            Subscription subscription = null;
+
+            // add subscription
+            lock (_subscriptions) {
+                subscription = new Subscription(this, observer, null);
+                _subscriptions.Add(subscription);
+            }
+
+            return subscription;
+        }
+
+        /// <summary>
+        /// Subscribes the observer to this peer.
+        /// </summary>
+        /// <param name="observer">The observer.</param>
+        /// <param name="predicate">The predicate to match for frames.</param>
+        /// <returns>A disposable wrapper for the subscription.</returns>
+        public IDisposable Subscribe(IObserver<TFrame> observer, Predicate<TFrame> predicate) {
+            Subscription subscription = null;
+
+            // add subscription
+            lock (_subscriptions) {
+                subscription = new Subscription(this, observer, predicate);
+                _subscriptions.Add(subscription);
+            }
+
+            return subscription;
         }
         #endregion
 
@@ -869,6 +1012,25 @@ namespace ProtoSocket
         struct CorrelatedWait
         {
             public TaskCompletionSource<TFrame> TaskSource { get; set; }
+        }
+
+        class Subscription : IDisposable
+        {
+            public ProtocolPeer<TFrame> Peer { get; private set; }
+            public Predicate<TFrame> Predicate { get; private set; }
+            public IObserver<TFrame> Observer { get; private set; }
+
+            public void Dispose() {
+                lock(Peer._subscriptions) {
+                    Peer._subscriptions.Remove(this);
+                }
+            }
+
+            public Subscription(ProtocolPeer<TFrame> peer, IObserver<TFrame> observer, Predicate<TFrame> predicate) {
+                Peer = peer;
+                Observer = observer;
+                Predicate = predicate;
+            }
         }
         #endregion
 

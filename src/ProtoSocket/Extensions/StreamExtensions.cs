@@ -14,7 +14,7 @@ namespace ProtoSocket.Extensions
     {
         #region Extensions
         /// <summary>
-        /// Reads a block of data asyncronously, unlike <see cref="Stream.ReadAsync"/> you are guarenteed to get all of the data. If you get less than the requested count the end of stream has been reached.
+        /// Reads a block of data asyncronously, unlike <see cref="Stream.ReadAsync(byte[], int, int, CancellationToken)"/> you are guarenteed to get all of the data. If you get less than the requested count the end of stream has been reached.
         /// </summary>
         /// <param name="stream">The stream.</param>
         /// <param name="buffer">The buffer.</param>

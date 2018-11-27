@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
-namespace Example.Minecraft
+namespace Example.Minecraft.Net.Packets
 {
     /// <summary>
     /// Provides functionality to write classic packets.

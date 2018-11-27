@@ -12,8 +12,14 @@ namespace Example.Chat
     /// <summary>
     /// Encodes/decodes chat messages.
     /// </summary>
-    public class ChatCoder : IProtocolCoder<ChatMessage>
+    public class ChatCoder : IStreamCoder<ChatMessage>
     {
+        public ProtocolCoderType Type {
+            get {
+                return ProtocolCoderType.Stream;
+            }
+        }
+
         public async Task<ChatMessage> ReadAsync(Stream stream, CoderContext<ChatMessage> ctx, CancellationToken cancellationToken) {
             byte[] msgSize = new byte[2];
 

@@ -4,12 +4,13 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Example.Minecraft.Net.Packets;
 using ProtoSocket;
 using ProtoSocket.Extensions;
 
-namespace Example.Minecraft
+namespace Example.Minecraft.Net
 {
-    class ClassicCoder : IProtocolCoder<ClassicPacket>
+    class ClassicCoder : IStreamCoder<ClassicPacket>
     {
         /// <summary>
         /// Defines the packet sizes.
@@ -26,6 +27,12 @@ namespace Example.Minecraft
             { PacketId.PositionAngle, 9 },
             { PacketId.Message, 65 }
         };
+
+        public ProtocolCoderType Type {
+            get {
+                return ProtocolCoderType.Stream;
+            }
+        }
 
         public async Task<ClassicPacket> ReadAsync(Stream stream, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
             // read packet id

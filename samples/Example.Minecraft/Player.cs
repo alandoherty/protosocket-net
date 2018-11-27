@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Example.Minecraft.Net;
+using Example.Minecraft.Net.Packets;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
@@ -104,7 +106,7 @@ namespace Example.Minecraft
         /// <summary>
         /// Spawns the player.
         /// </summary>
-        public async void Spawn() {
+        public void Spawn() {
             if (_spawned)
                 return;
 
@@ -127,19 +129,15 @@ namespace Example.Minecraft
                 spawnWriter.WriteByte((byte)((Pitch / 360) * 255));
                 spawnPacket.Payload = spawnWriter.ToArray();
 
-                sendTasks.Add(p.Connection.SendAsync(spawnPacket));
+                p.Connection.Queue(spawnPacket);
             }
-
-            try {
-                await Task.WhenAll(sendTasks);
-            } catch (Exception) { }
         }
 
         /// <summary>
         /// Spawns the player to the provided player.
         /// </summary>
         /// <param name="player"></param>
-        public async void Spawn(Player player) {
+        public void Spawn(Player player) {
             ClassicPacket spawnPacket = new ClassicPacket();
             spawnPacket.Id = PacketId.SpawnPlayer;
 
@@ -153,31 +151,27 @@ namespace Example.Minecraft
             spawnWriter.WriteByte((byte)((Pitch / 360) * 255));
             spawnPacket.Payload = spawnWriter.ToArray();
 
-            try {
-                await player.Connection.SendAsync(spawnPacket);
-            } catch (Exception) { }
+            player.Connection.Queue(spawnPacket);
         }
 
         /// <summary>
         /// Despawns the player to the provided player.
         /// </summary>
         /// <param name="player"></param>
-        public async void Despawn(Player player) {
+        public void Despawn(Player player) {
             ClassicPacket spawnPacket = new ClassicPacket();
             spawnPacket.Id = PacketId.DespawnPlayer;
 
             PacketWriter spawnWriter = new PacketWriter();
             spawnWriter.WriteSByte(this == player ? (sbyte)-1 : ID);
-
-            try {
-                await player.Connection.SendAsync(spawnPacket);
-            } catch (Exception) { }
+            
+            player.Connection.Queue(spawnPacket);
         }
 
         /// <summary>
         /// Despawns the player.
         /// </summary>
-        public async void Despawn() {
+        public void Despawn() {
             if (!_spawned)
                 return;
 
@@ -193,12 +187,8 @@ namespace Example.Minecraft
                 PacketWriter spawnWriter = new PacketWriter();
                 spawnWriter.WriteSByte(this == p ? (sbyte)-1 : ID);
 
-                sendTasks.Add(p.Connection.SendAsync(spawnPacket));
+                p.Connection.Queue(spawnPacket);
             }
-
-            try {
-                await Task.WhenAll(sendTasks);
-            } catch (Exception) { }
         }
 
         public void SetUserLevel(byte level) {
@@ -209,7 +199,7 @@ namespace Example.Minecraft
             UpdatePosition(x, y, z, _yaw, _pitch, true);
         }
 
-        public async void Message(sbyte id, string msg) {
+        public void Message(sbyte id, string msg) {
             ClassicPacket packet = new ClassicPacket();
             packet.Id = PacketId.Message;
 
@@ -217,11 +207,8 @@ namespace Example.Minecraft
             writer.WriteSByte(id);
             writer.WriteString(msg);
             packet.Payload = writer.ToArray();
-
-            try {
-                await _connection.SendAsync(packet);
-            } catch (Exception) {
-            }
+            
+            _connection.Queue(packet);
         }
 
         public async void Kick(string reason) {
@@ -237,17 +224,14 @@ namespace Example.Minecraft
             writer.WriteString(reason);
             packet.Payload = writer.ToArray();
 
-            await _connection.SendAsync(packet);
-
-            // close connection
-            _connection.Dispose();
+            await _connection.SendAsync(packet).ConfigureAwait(false);
 
             // remove from world
             if (_id > -1)
                 _world.RemovePlayer(this);
         }
 
-        public async void UpdatePosition(float x, float y, float z, float yaw, float pitch, bool updateSelf) {
+        public void UpdatePosition(float x, float y, float z, float yaw, float pitch, bool updateSelf) {
             // update values
             float newX = Math.Clamp(x, 0, _world.Width);
             float newY = Math.Clamp(y, 0, _world.Height);
@@ -291,7 +275,7 @@ namespace Example.Minecraft
                         writer.WriteByte((byte)((_pitch / 360) * 255));
                         posPacket.Payload = writer.ToArray();
 
-                        updateTasks.Add(p.Connection.SendAsync(posPacket));
+                        p.Connection.Queue(posPacket);
                     } else {
                         ClassicPacket posUpdatePacket = new ClassicPacket();
                         posUpdatePacket.Id = PacketId.PositionAngleUpdate;
@@ -305,81 +289,8 @@ namespace Example.Minecraft
                         writer.WriteByte((byte)((_pitch / 360) * 255));
                         posUpdatePacket.Payload = writer.ToArray();
 
-                        updateTasks.Add(p.Connection.SendAsync(posUpdatePacket));
+                        p.Connection.Queue(posUpdatePacket);
                     }
-                }
-            }
-
-            try {
-                await Task.WhenAll(updateTasks);
-            } catch (Exception) { }
-        }
-
-        public async void ConnLoop() {
-            while (true) {
-                ClassicPacket packet = null;
-
-                try {
-                    packet = await _connection.ReceiveAsync();
-                } catch(Exception) {
-                    return;
-                }
-
-                switch(packet.Id) {
-                    case PacketId.PositionAngle:
-                        PacketReader posAngReader = new PacketReader(packet.Payload);
-                        posAngReader.ReadByte();
-
-                        // update position
-                        UpdatePosition(posAngReader.ReadShort() / 32.0f, posAngReader.ReadShort() / 32.0f, posAngReader.ReadShort() / 32.0f, (posAngReader.ReadByte() / 255.0f) * 360.0f, (posAngReader.ReadByte() / 255.0f) * 360.0f, false);
-                        break;
-
-                    case PacketId.Message:
-                        PacketReader msgReader = new PacketReader(packet.Payload);
-                        msgReader.ReadByte();
-                        string msgText = msgReader.ReadString();
-
-                        if (msgText.StartsWith('/')) {
-                            if (msgText.StartsWith("/clear", StringComparison.CurrentCultureIgnoreCase)) {
-                                _world.ClearText();
-                            } else if (msgText.StartsWith("/text ", StringComparison.CurrentCultureIgnoreCase)) {
-                                _world.ClearText();
-                                _world.DrawText(msgText.Substring(6));
-                            } else if (msgText.StartsWith("/texta ", StringComparison.CurrentCultureIgnoreCase)) {
-                                _world.ClearText();
-                                _world.DrawTextAnimated(msgText.Substring(7));
-                            } else if (msgText.StartsWith("/load", StringComparison.CurrentCultureIgnoreCase)) {
-                                _world.Load();
-                            } else if (msgText.StartsWith("/save", StringComparison.CurrentCultureIgnoreCase)) {
-                                _world.Save();
-                            } else {
-                                Message(-1, "Unknown command");
-                            }
-                        } else {
-                            foreach (Player p in _world.Players)
-                                p.Message(p == this ? (sbyte)-1 : ID, string.Format("{0}: {1}", Name, msgText));
-                        }
-
-                        break;
-
-                    case PacketId.AskBlock:
-                        PacketReader askReader = new PacketReader(packet.Payload);
-                        int askX = askReader.ReadShort();
-                        int askY = askReader.ReadShort();
-                        int askZ = askReader.ReadShort();
-                        byte askMode = askReader.ReadByte();
-                        byte askBlockType = askReader.ReadByte();
-
-                        if (askMode == 0) {
-                            _world.SetBlock(askX, askY, askZ, 0);
-                        } else {
-                            _world.SetBlock(askX, askY, askZ, askBlockType);
-                        }
-                        break;
-
-                    default:
-                        Console.WriteLine("Unknown packet: {0}", packet.Id.ToString());
-                        break;
                 }
             }
         }
