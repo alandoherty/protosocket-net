@@ -112,7 +112,6 @@ namespace ProtoSocket
         /// </summary>
         /// <param name="coder">The coder.</param>
         public ProtocolClient(IProtocolCoder<TFrame> coder) : base(coder) {
-
         }
         #endregion
     }

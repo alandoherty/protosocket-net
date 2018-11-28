@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Pipelines;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,7 +11,7 @@ using ProtoSocket.Extensions;
 
 namespace Example.Minecraft.Net
 {
-    class ClassicCoder : IStreamCoder<ClassicPacket>
+    class ClassicCoder : IProtocolCoder<ClassicPacket>
     {
         /// <summary>
         /// Defines the packet sizes.
@@ -28,10 +29,7 @@ namespace Example.Minecraft.Net
             { PacketId.Message, 65 }
         };
 
-        public ProtocolCoderType Type {
-            get {
-                return ProtocolCoderType.Stream;
-            }
+        public void Process(PipeReader reader) {
         }
 
         public async Task<ClassicPacket> ReadAsync(Stream stream, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
@@ -61,6 +59,18 @@ namespace Example.Minecraft.Net
                 Payload = packetPayload,
                 Id = packetId
             };
+        }
+
+        public void Reset() {
+        }
+
+        /// <summary>
+        /// Defines the internal read states.
+        /// </summary>
+        enum ReadState
+        {
+            PacketId,
+            Payload
         }
 
         public async Task WriteAsync(Stream stream, ClassicPacket frame, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {

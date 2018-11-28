@@ -412,7 +412,8 @@ namespace Example.Minecraft
                 List<Task> sendTasks = new List<Task>();
 
                 foreach (ClassicConnection connection in _server.Connections) {
-                    sendTasks.Add(connection.SendAsync());
+                    if (connection.IsConnected)
+                        sendTasks.Add(connection.SendAsync());
                 }
                 await Task.WhenAll(sendTasks);
 

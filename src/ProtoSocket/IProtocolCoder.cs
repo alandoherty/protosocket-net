@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Pipelines;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,6 +15,13 @@ namespace ProtoSocket
         where TFrame : class
     {
         /// <summary>
+        /// Resets the coder to it's initial state.
+        /// </summary>
+        void Reset();
+        
+        void Process(PipeReader reader);
+
+        /// <summary>
         /// Write the frame to the stream asyncronously.
         /// </summary>
         /// <param name="stream">The stream.</param>
@@ -22,10 +30,5 @@ namespace ProtoSocket
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns></returns>
         Task WriteAsync(Stream stream, TFrame frame, CoderContext<TFrame> ctx, CancellationToken cancellationToken);
-
-        /// <summary>
-        /// Gets the coder type.
-        /// </summary>
-        ProtocolCoderType Type { get; }
     }
 }
