@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Pipelines;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -22,7 +23,10 @@ namespace ProtoSocket
         private NetworkStream _netStream;
         private Stream _dataStream;
         private TcpClient _client;
+
         private string _closeReason;
+        private Exception _closeException;
+
         private object _userdata = null;
         private IProtocolCoder<TFrame> _coder;
         private ProtocolState _state = ProtocolState.Connecting;
@@ -46,6 +50,10 @@ namespace ProtoSocket
         private TaskCompletionSource<TFrame> _receiveSource = null;
 
         private List<Subscription> _subscriptions = new List<Subscription>();
+
+        private PipeReader _pipeReader = null;
+        private PipeWriter _pipeWriter = null;
+        private Pipe _pipe = null;
         #endregion
 
         #region Properties
@@ -318,9 +326,8 @@ namespace ProtoSocket
 
                 // increment stat
                 _statFramesOut++;
-            } catch(Exception) {
-                _closeReason = "Failed to encode frame";
-                Abort();
+            } catch(Exception ex) {
+                Abort("Failed to encode frame", ex);
                 throw;
             }
 
@@ -644,9 +651,8 @@ namespace ProtoSocket
             // perform upgrade
             try {
                 _dataStream = await upgrader.UpgradeAsync(_dataStream, this);
-            } catch (Exception) {
-                _closeReason = "Failed to upgrade peer stream";
-                Abort();
+            } catch (Exception ex) {
+                Abort("Failed to upgrade peer stream", ex);
                 throw;
             }
 
@@ -667,9 +673,18 @@ namespace ProtoSocket
         /// Forcibly close the peer, should be called when connection is lost.
         /// We have no time to send out any queued frames.
         /// </summary>
-        private void Abort() {
+        /// <param name="closeReason">The optional reason.</param>
+        /// <param name="closeException">The optional exception.</param>
+        private void Abort(string closeReason = null, Exception closeException = null) {
+            // check if already disconnected
             if (_state == ProtocolState.Disconnected)
                 return;
+
+            // set close reason and/or exception if not set already
+            if (closeReason != null && _closeReason == null)
+                _closeReason = closeReason;
+            if (closeException != null && _closeException == null)
+                _closeException = closeException;   
 
             // dispose client
             OnStateChanged(new PeerStateChangedEventArgs<TFrame>() {
@@ -687,20 +702,19 @@ namespace ProtoSocket
         /// Reads the next frame.
         /// </summary>
         private async void ReadLoop() {
-            IStreamCoder<TFrame> coder = (IStreamCoder<TFrame>)_coder;
             PeerReceivedEventArgs<TFrame> eventArgs = new PeerReceivedEventArgs<TFrame>() {
                 Peer = this
             };
 
+            // the internal read buffer
+            byte[] buffer = new byte[1024];
+            int bufferRead = 0;
+
             while (_disposed == 0) {
                 try {
-                    // read frame
-                    TFrame frame = default(TFrame);
-
+                    // read stream into pipe
                     try {
-                        using (CancellationTokenSource cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(_disposeSource.Token, _readCancelSource.Token)) {
-                            frame = await coder.ReadAsync(_dataStream, new CoderContext<TFrame>(this), _disposeSource.Token);
-                        }
+                        bufferRead = await _dataStream.ReadAsync(buffer, 0, buffer.Length, _disposeSource.Token).ConfigureAwait(false);
                     } catch (OperationCanceledException ex) {
                         if (ex.CancellationToken == _disposeSource.Token) {
                             _closeReason = "Peer disposed before incoming frame decoded";
@@ -713,77 +727,84 @@ namespace ProtoSocket
                         throw;
                     }
 
-                    // if the frame is null we've reached end of stream
-                    if (frame == null) {
-                        _closeReason = "End of stream";
-                        Abort();
+                    // check if end of stream has been reached
+                    if (bufferRead == 0) {
+                        Abort("End of stream");
                         return;
                     }
 
-                    // increment stat
-                    _statFramesIn++;
+                    // write to pipe
+                    await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, 0, bufferRead)).ConfigureAwait(false);
 
-                    // correlate frame if supported
-                    if (frame is ICorrelatableFrame<TFrame>) {
-                        ICorrelatableFrame<TFrame> requestableFrame = frame as ICorrelatableFrame<TFrame>;
+                    // process coder
+                    if (_coder.Read(_pipeReader, out IEnumerable<TFrame> frames)) {
+                        foreach(TFrame frame in frames) {
+                            // increment stat
+                            _statFramesIn++;
 
-                        // verify we have a correlation
-                        bool dropDead = false;
+                            // correlate frame if supported
+                            if (frame is ICorrelatableFrame<TFrame>) {
+                                ICorrelatableFrame<TFrame> requestableFrame = frame as ICorrelatableFrame<TFrame>;
 
-                        if (requestableFrame.HasCorrelation && requestableFrame.ShouldCorrelate(out dropDead)) {
-                            // get the wait, if found
-                            CorrelatedWait wait = default(CorrelatedWait);
+                                // verify we have a correlation
+                                bool dropDead = false;
 
-                            lock (_correlations) {
-                                if (_correlations.TryGetValue(requestableFrame.CorrelationId, out wait))
-                                    _correlations.Remove(requestableFrame.CorrelationId);
+                                if (requestableFrame.HasCorrelation && requestableFrame.ShouldCorrelate(out dropDead)) {
+                                    // get the wait, if found
+                                    CorrelatedWait wait = default(CorrelatedWait);
+
+                                    lock (_correlations) {
+                                        if (_correlations.TryGetValue(requestableFrame.CorrelationId, out wait))
+                                            _correlations.Remove(requestableFrame.CorrelationId);
+                                    }
+
+                                    // complete task
+                                    if (wait.TaskSource != null)
+                                        wait.TaskSource.SetResult(frame);
+
+                                    // read the next frame if we need to drop it
+                                    if (dropDead || wait.TaskSource != null)
+                                        continue;
+                                }
                             }
 
-                            // complete task
-                            if (wait.TaskSource != null)
-                                wait.TaskSource.SetResult(frame);
+                            // check if a receive source is pending and try and set its result
+                            TaskCompletionSource<TFrame> receiveSource = _receiveSource;
 
-                            // read the next frame if we need to drop it
-                            if (dropDead || wait.TaskSource != null)
+                            if (receiveSource != null) {
+                                // if successful dont notify event handler or subscribers
+                                if (receiveSource.TrySetResult(frame))
+                                    continue;
+                            }
+
+                            // if the frame was observed, if not we know to add it to the queue
+                            bool wasObserved = false;
+
+                            // call event
+                            eventArgs.Handled = false;
+                            eventArgs.Frame = frame;
+
+                            if (OnReceived(eventArgs))
+                                wasObserved = true;
+
+                            // if handled don't notify subscribers
+                            if (eventArgs.Handled)
                                 continue;
+
+                            // notify subscribers
+                            if (Notify(frame))
+                                wasObserved = true;
+
+                            // if the frame wasn't observed by anything add it to the queue
+                            if (!wasObserved) {
+                                lock (_receiveQueue) {
+                                    _receiveQueue.Enqueue(frame);
+                                }
+                            }
                         }
                     }
-
-                    // check if a receive source is pending and try and set its result
-                    TaskCompletionSource<TFrame> receiveSource = _receiveSource;
-
-                    if (receiveSource != null) {
-                        // if successful dont notify event handler or subscribers
-                        if (receiveSource.TrySetResult(frame))
-                            continue;
-                    }
-
-                    // if the frame was observed, if not we know to add it to the queue
-                    bool wasObserved = false;
-
-                    // call event
-                    eventArgs.Handled = false;
-                    eventArgs.Frame = frame;
-
-                    if (OnReceived(eventArgs))
-                        wasObserved = true;
-
-                    // if handled don't notify subscribers
-                    if (eventArgs.Handled)
-                        continue;
-
-                    // notify subscribers
-                    if (Notify(frame))
-                        wasObserved = true;
-
-                    // if the frame wasn't observed by anything add it to the queue
-                    if (!wasObserved) {
-                        lock (_receiveQueue) {
-                            _receiveQueue.Enqueue(frame);
-                        }
-                    }
-                } catch (Exception) {
-                    Abort();
+                } catch (Exception ex) {
+                    Abort("Unexpected exception during read", ex);
                     return;
                 }
             }
@@ -818,6 +839,11 @@ namespace ProtoSocket
             // set streams
             _netStream = client.GetStream();
             _dataStream = _netStream;
+
+            // set pipe
+            _pipe = new Pipe();
+            _pipeReader = _pipe.Reader;
+            _pipeWriter = _pipe.Writer;
 
             // call event
             OnConnected(new PeerConnectedEventArgs<TFrame>() { Peer = this });
@@ -860,7 +886,7 @@ namespace ProtoSocket
             Interlocked.CompareExchange(ref _closeReason, "Disposed", null);
 
             // create disposed exception
-            ObjectDisposedException objectDisposedException = new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), $"The peer has been closed: {_closeReason}");
+            ObjectDisposedException objectDisposedException = new ObjectDisposedException($"The peer has been closed: {_closeReason}", _closeException);
 
             // mark receive as disposed, we retrieve it first because other threads could set it to null
             // inbetween our accessing it

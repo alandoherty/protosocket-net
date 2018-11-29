@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipelines;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,9 +31,9 @@ namespace Example.Minecraft.Net
             { PacketId.Message, 65 }
         };
 
-        public void Process(PipeReader reader) {
-        }
-
+        private ReadState _state;
+        private byte _packetId;
+        
         public async Task<ClassicPacket> ReadAsync(Stream stream, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
             // read packet id
             byte[] idBuffer = new byte[1];
@@ -62,6 +64,7 @@ namespace Example.Minecraft.Net
         }
 
         public void Reset() {
+            _state = ReadState.PacketId;
         }
 
         /// <summary>
@@ -76,6 +79,21 @@ namespace Example.Minecraft.Net
         public async Task WriteAsync(Stream stream, ClassicPacket frame, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
             await stream.WriteAsync(new byte[] { (byte)frame.Id }, 0, 1).ConfigureAwait(false);
             await stream.WriteAsync(frame.Payload, 0, frame.Payload.Length).ConfigureAwait(false);
+        }
+
+        public bool Read(PipeReader reader, out IEnumerable<ClassicPacket> frames) {
+            while(reader.TryRead(out ReadResult result)) {
+                // get the sequence buffer
+                ReadOnlySequence<byte> buffer = result.Buffer;
+
+                if (_state == ReadState.PacketId) {
+                }
+
+                break;
+            }
+
+            frames = Enumerable.Empty<ClassicPacket>();
+            return false;
         }
     }
 }

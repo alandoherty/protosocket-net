@@ -17,9 +17,16 @@ namespace ProtoSocket
         /// <summary>
         /// Resets the coder to it's initial state.
         /// </summary>
+        /// <remarks>This is not called initially, you should call this inside your constructor.</remarks>
         void Reset();
         
-        void Process(PipeReader reader);
+        /// <summary>
+        /// Processes the input and optionally return one or more frames.
+        /// </summary>
+        /// <param name="reader">The reader.</param>
+        /// <param name="frames">The optional output frames.</param>
+        /// <returns>If any frames were outputted.</returns>
+        bool Read(PipeReader reader, out IEnumerable<TFrame> frames);
 
         /// <summary>
         /// Write the frame to the stream asyncronously.
