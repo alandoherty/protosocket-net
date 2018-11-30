@@ -119,6 +119,28 @@ namespace ProtoSocket
         }
 
         /// <summary>
+        /// Gets or sets if to enable TCP keep alive.
+        /// </summary>
+        public bool KeepAlive {
+            get {
+                return (bool)_client.Client.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive);
+            } set {
+                _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, value);
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets if TCP no delay is enabled.`
+        /// </summary>
+        public bool NoDelay {
+            get {
+                return _client.NoDelay;
+            } set {
+                _client.NoDelay = value;
+            }
+        }
+
+        /// <summary>
         /// Gets if the peer is connected.
         /// </summary>
         public bool IsConnected {
@@ -692,7 +714,17 @@ namespace ProtoSocket
                 NewState = ProtocolState.Disconnected
             });
 
+            // set disconnected
             _state = ProtocolState.Disconnected;
+
+            // remove all subscriptions mark as error
+            lock(_subscriptions) {
+                foreach(IObserver<TFrame> observer in _subscriptions) {
+                    observer.OnError(closeException ?? new Exception($"Peer aborted: {closeReason ?? "Unknown"}"));
+                }
+
+                _subscriptions.Clear();
+            }
 
             // dispose
             Dispose();
@@ -736,9 +768,21 @@ namespace ProtoSocket
                     // write to pipe
                     await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, 0, bufferRead)).ConfigureAwait(false);
 
-                    // process coder
-                    if (_coder.Read(_pipeReader, out IEnumerable<TFrame> frames)) {
-                        foreach(TFrame frame in frames) {
+                    // try and process the incoming data into frames
+                    bool processedFrame = false;
+                    IEnumerable<TFrame> processedFrames = null;
+
+                    try {
+                        processedFrame = _coder.Read(_pipeReader, out processedFrames);
+                    } catch(Exception ex) {
+                        _closeReason = (ex is ProtocolCoderException) ? "Failed to decode incoming frame" : "Exception occured while decoding frame";
+                        _closeException = ex;
+                        break;
+                    }
+
+                    // if we found at least one frame lets process them
+                    if (processedFrame) {
+                        foreach(TFrame frame in processedFrames) {
                             // increment stat
                             _statFramesIn++;
 
@@ -825,7 +869,6 @@ namespace ProtoSocket
 
             // set client
             _client = client;
-            _client.NoDelay = true;
             _localEP = (IPEndPoint)_client.Client.LocalEndPoint;
             _remoteEP = (IPEndPoint)_client.Client.RemoteEndPoint;
 
@@ -918,6 +961,15 @@ namespace ProtoSocket
                     _client.Dispose();
             } catch (Exception) { }
 
+            // remove all subscriptions mark as completeds
+            lock (_subscriptions) {
+                foreach (IObserver<TFrame> observer in _subscriptions) {
+                    observer.OnCompleted();
+                }
+
+                _subscriptions.Clear();
+            }
+
             // disconnected event
             if (_client != null)
                 OnDisconnected(new PeerDisconnectedEventArgs<TFrame>() { Peer = this });
@@ -969,15 +1021,17 @@ namespace ProtoSocket
         private bool Notify(TFrame frame) {
             bool observed = false;
 
-            lock(_subscriptions) {
-                foreach(Subscription subscription in _subscriptions) {
-                    if (subscription.Predicate == null) {
-                        observed = true;
-                        subscription.Observer.OnNext(frame);
-                    } else {
-                        if (subscription.Predicate(frame)) {
+            if (_subscriptions.Count > 0) {
+                lock (_subscriptions) {
+                    foreach (Subscription subscription in _subscriptions) {
+                        if (subscription.Predicate == null) {
                             observed = true;
                             subscription.Observer.OnNext(frame);
+                        } else {
+                            if (subscription.Predicate(frame)) {
+                                observed = true;
+                                subscription.Observer.OnNext(frame);
+                            }
                         }
                     }
                 }

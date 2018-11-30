@@ -445,6 +445,10 @@ namespace Example.Minecraft
         }
 
         private async void OnConnected(object sender, PeerConnectedEventArgs<ClassicPacket> e) {
+            // set tcp options
+            e.Peer.NoDelay = true;
+            e.Peer.KeepAlive = true;
+
             // receive identification
             ClassicPacket packet = await e.Peer.ReceiveAsync();
 
@@ -535,7 +539,7 @@ namespace Example.Minecraft
             finishPacket.Payload = finishWriter.ToArray();
             await e.Peer.SendAsync(finishPacket);
 
-            e.Peer.Received += (o, e2) => _incomingPackets.Enqueue((((Player)e2.Peer.Userdata), e2.Frame));
+            e.Peer.Subscribe(new PacketSubscriber() { Player = player, World = this });
 
             // add player and spawn
             AddPlayer(player);
@@ -553,6 +557,22 @@ namespace Example.Minecraft
             }
         }
         #endregion
+
+        class PacketSubscriber : IObserver<ClassicPacket>
+        {
+            public Player Player { get; set; }
+            public World World { get; set; }
+
+            public void OnCompleted() {
+            }
+
+            public void OnError(Exception error) {
+            }
+
+            public void OnNext(ClassicPacket value) {
+                World._incomingPackets.Enqueue((Player, value));
+            }
+        }
 
         #region Constructors
         /// <summary>

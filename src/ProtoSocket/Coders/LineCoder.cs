@@ -4,10 +4,13 @@ using System.Text;
 
 namespace ProtoSocket.Coders
 {
+    //todo
+
     /// <summary>
     /// Provides a pre-built coder which can create frames based off UTF-8 strings seperated by newlines.
+    /// To be implemented.
     /// </summary>
-    public abstract class LineCoder<TFrame>
+    abstract class LineCoder<TFrame>
     {
         /// <summary>
         /// Gets or sets the new line string.

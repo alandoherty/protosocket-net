@@ -239,19 +239,21 @@ namespace ProtoSocket
                 } catch (ObjectDisposedException) {
                     return;
                 }
-
+                
                 // accept client
                 AcceptNext(client);
             }
         }
 
         /// <summary>
-        /// Starts listening for connections.
+        /// Starts listening for new connections.
         /// </summary>
         public virtual void Start() {
             // check if disposed
             if (_disposed > 0)
                 throw new ObjectDisposedException("The protocol server has been disposed");
+            else if (_stopSource != null)
+                throw new InvalidOperationException("The server has already been started");
 
             // create stop source
             _stopSource = new CancellationTokenSource();
@@ -262,7 +264,7 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Stops listening for connections.
+        /// Stops listening for new connections.
         /// </summary>
         public virtual void Stop() { 
             Dispose();

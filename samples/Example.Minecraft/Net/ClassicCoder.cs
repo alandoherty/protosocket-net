@@ -32,39 +32,17 @@ namespace Example.Minecraft.Net
         };
 
         private ReadState _state;
-        private byte _packetId;
-        
-        public async Task<ClassicPacket> ReadAsync(Stream stream, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
-            // read packet id
-            byte[] idBuffer = new byte[1];
+        private PacketId _packetId;
+        private byte[] _packetPayload;
+        private int _packetPayloadOffset;
 
-            if (await stream.ReadAsync(idBuffer, 0, 1).ConfigureAwait(false) == 0)
-                return null;
-
-            // validate packet id
-            PacketId packetId = (PacketId)idBuffer[0];
-
-            if (!Enum.IsDefined(typeof(PacketId), packetId))
-                throw new InvalidDataException("The packet identifier is not supported");
-
-            // packet handler
-            int packetSize = PacketSizes[packetId];
-
-            // read packet payload
-            byte[] packetPayload = new byte[packetSize];
-
-            if (await stream.ReadBlockAsync(packetPayload, 0, packetSize, cancellationToken).ConfigureAwait(false) == 0)
-                return null;
-
-            // create packet
-            return new ClassicPacket() {
-                Payload = packetPayload,
-                Id = packetId
-            };
-        }
-
+        /// <summary>
+        /// Resets the coder state.
+        /// </summary>
         public void Reset() {
             _state = ReadState.PacketId;
+            _packetPayloadOffset = 0;
+            _packetPayload = null;
         }
 
         /// <summary>
@@ -76,22 +54,86 @@ namespace Example.Minecraft.Net
             Payload
         }
 
+        /// <summary>
+        /// Writes the frame to the buffer asyncronously.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <param name="frame">The frame.</param>
+        /// <param name="ctx">The coder context.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns></returns>
         public async Task WriteAsync(Stream stream, ClassicPacket frame, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
-            await stream.WriteAsync(new byte[] { (byte)frame.Id }, 0, 1).ConfigureAwait(false);
-            await stream.WriteAsync(frame.Payload, 0, frame.Payload.Length).ConfigureAwait(false);
+            // rent a combined buffer
+            int combinedLength = frame.Payload.Length + 1;
+            byte[] combinedBuffer = ArrayPool<byte>.Shared.Rent(combinedLength);
+
+            try {
+                // copy data into the buffer
+                combinedBuffer[0] = (byte)frame.Id;
+                Buffer.BlockCopy(frame.Payload, 0, combinedBuffer, 1, frame.Payload.Length);
+
+                // write asyncronously
+                await stream.WriteAsync(combinedBuffer, 0, combinedLength, cancellationToken).ConfigureAwait(false);
+            } finally {
+                ArrayPool<byte>.Shared.Return(combinedBuffer);
+            }
         }
 
         public bool Read(PipeReader reader, out IEnumerable<ClassicPacket> frames) {
             while(reader.TryRead(out ReadResult result)) {
+                // check if the pipe is completed
+                if (result.IsCompleted)
+                    break;
+
                 // get the sequence buffer
                 ReadOnlySequence<byte> buffer = result.Buffer;
 
                 if (_state == ReadState.PacketId) {
-                }
+                    // read in the packet id and setup the payload state
+                    _packetId = (PacketId)buffer.First.Span[0];
+                    _packetPayload = new byte[PacketSizes[_packetId]];
+                    _state = ReadState.Payload;
 
-                break;
+                    // advance by one byte
+                    reader.AdvanceTo(buffer.GetPosition(1));
+                } else if (_state == ReadState.Payload) {
+                    int advancedBytes = 0;
+
+                    try {
+                        foreach (ReadOnlyMemory<byte> seq in buffer) {
+                            // calculate the amount of needed data to complete this packet
+                            int neededBytes = _packetPayload.Length - _packetPayloadOffset;
+
+                            // calculate how much of this buffer we should copy, if the buffer is smaller than the amount we need we take the full buffer
+                            // otherwise we take as much as we can
+                            int copyBytes = Math.Min(seq.Length, neededBytes);
+
+                            // copy in the data we can get into the frame payload
+                            seq.Span.Slice(0, copyBytes).
+                                CopyTo(new Span<byte>(_packetPayload, _packetPayloadOffset, copyBytes));
+
+                            // increment the amount we were able to copy in
+                            advancedBytes += copyBytes;
+                            _packetPayloadOffset += copyBytes;
+
+                            // if we have a complete frame, return it
+                            if (_packetPayloadOffset == _packetPayload.Length) {
+                                // output the frames
+                                frames = new ClassicPacket[] { new ClassicPacket() { Id = _packetId, Payload = _packetPayload } };
+
+                                // reset the state
+                                Reset();
+
+                                return true;
+                            }
+                        }
+                    } finally {
+                        reader.AdvanceTo(buffer.GetPosition(advancedBytes));
+                    }
+                }
             }
 
+            // we didn't get any complete frames in this read
             frames = Enumerable.Empty<ClassicPacket>();
             return false;
         }
