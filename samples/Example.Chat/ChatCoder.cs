@@ -66,6 +66,8 @@ namespace Example.Chat
                                 // reset the state
                                 Reset();
                                 return true;
+                            } else {
+                                break;
                             }
                         }
                     }

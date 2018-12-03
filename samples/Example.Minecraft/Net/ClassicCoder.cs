@@ -110,6 +110,8 @@ namespace Example.Minecraft.Net
                                 // reset the state
                                 Reset();
                                 return true;
+                            } else {
+                                break;
                             }
                         }
                     }
