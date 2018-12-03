@@ -78,11 +78,7 @@ namespace Example.Minecraft.Net
         }
 
         public bool Read(PipeReader reader, CoderContext<ClassicPacket> ctx, out ClassicPacket frame) {
-            while(reader.TryRead(out ReadResult result)) {
-                // check if the pipe is completed
-                if (result.IsCompleted)
-                    break;
-
+            if (reader.TryRead(out ReadResult result) && !result.IsCompleted) {
                 // get the sequence buffer
                 ReadOnlySequence<byte> buffer = result.Buffer;
 

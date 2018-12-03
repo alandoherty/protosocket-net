@@ -21,11 +21,7 @@ namespace Example.Chat
         private int _messageLength;
 
         public bool Read(PipeReader reader, CoderContext<ChatMessage> ctx, out ChatMessage frame) {
-            while (reader.TryRead(out ReadResult result)) {
-                // check if the pipe is completed
-                if (result.IsCompleted)
-                    break;
-
+            if (reader.TryRead(out ReadResult result) && !result.IsCompleted) {
                 // get the sequence buffer
                 ReadOnlySequence<byte> buffer = result.Buffer;
 
