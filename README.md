@@ -67,6 +67,14 @@ Task message3 = peer.QueueAsync(new ChatMessage() { Text = "I like eBooks too" }
 await Task.WhenAll(message1, message2, message3);
 ``` 
 
+### Coders
+
+In the newer version of ProtoSocket, coders are implemented using `System.IO.Pipelines`. The same high-performance library powering ASP.NET Kestrel.
+
+You can find a great tutorial on the .NET Blog [here](https://blogs.msdn.microsoft.com/dotnet/2018/07/09/system-io-pipelines-high-performance-io-in-net/). Examples are available inside the repository, [ChatCoder.cs](samples/Example.Chat/ChatCoder.cs) and [ClassicCoder.cs](samples/Example.Minecraft/Net/ClassicCoder.cs).
+
+Your implementation simply needs to call `PipeReader.TryRead`, processing as much data as possible and either returning a frame (and true), or false to indicate you haven't got a full frame yet. The underlying peer will continually call your read implementation until you are able to output no more frames.
+
 ## Contributing
 
 Any pull requests or bug reports are welcome, please try and keep to the existing style conventions and comment any additions.
