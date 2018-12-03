@@ -40,6 +40,8 @@ namespace Example.Chat
                                 // increment the amount we were able to copy in
                                 buffer = buffer.Slice(2);
                                 _state = ReadState.Message;
+                            } else {
+                                break;
                             }
                         } else if (_state == ReadState.Message) {
                             if (buffer.Length >= _messageLength) {
