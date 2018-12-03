@@ -719,8 +719,8 @@ namespace ProtoSocket
 
             // remove all subscriptions mark as error
             lock(_subscriptions) {
-                foreach(IObserver<TFrame> observer in _subscriptions) {
-                    observer.OnError(closeException ?? new Exception($"Peer aborted: {closeReason ?? "Unknown"}"));
+                foreach(Subscription subscription in _subscriptions) {
+                    subscription.Observer.OnError(closeException ?? new Exception($"Peer aborted: {closeReason ?? "Unknown"}"));
                 }
 
                 _subscriptions.Clear();
@@ -969,6 +969,9 @@ namespace ProtoSocket
 
                 _subscriptions.Clear();
             }
+
+            // mark pipe reader as completed
+            _pipeReader.Complete(_closeException);
 
             // disconnected event
             if (_client != null)

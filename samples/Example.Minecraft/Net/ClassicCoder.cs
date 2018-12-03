@@ -80,6 +80,8 @@ namespace Example.Minecraft.Net
         }
 
         public bool Read(PipeReader reader, CoderContext<ClassicPacket> ctx, out IEnumerable<ClassicPacket> frames) {
+            List<ClassicPacket> inFrames = new List<ClassicPacket>(1);
+
             while(reader.TryRead(out ReadResult result)) {
                 // check if the pipe is completed
                 if (result.IsCompleted)

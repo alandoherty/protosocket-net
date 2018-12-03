@@ -28,6 +28,7 @@ namespace Example.Minecraft
         private Dictionary<sbyte, Player> _players = new Dictionary<sbyte, Player>();
         private ClassicServer _server = null;
         private ConcurrentQueue<(Player, ClassicPacket)> _incomingPackets = new ConcurrentQueue<(Player, ClassicPacket)>();
+        private DateTimeOffset _nextPing = DateTimeOffset.UtcNow;
 
         private byte[] _level = new byte[(256 * 256) * 64];
         #endregion
@@ -412,10 +413,21 @@ namespace Example.Minecraft
                 List<Task> sendTasks = new List<Task>();
 
                 foreach (ClassicConnection connection in _server.Connections) {
-                    if (connection.IsConnected)
+                    if (connection.IsConnected) {
+                        // queue ping if it's due
+                        if (_nextPing <= DateTime.UtcNow)
+                            connection.Queue(new ClassicPacket() { Id = PacketId.Ping, Payload = new byte[0] });
+
+                        // send all queued frames
                         sendTasks.Add(connection.SendAsync());
+                    }
                 }
+
                 await Task.WhenAll(sendTasks);
+
+                // set next ping
+                if (_nextPing <= DateTime.UtcNow)
+                    _nextPing = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
 
                 // wait up to tick rate
                 if (tickStopwatch.ElapsedMilliseconds > tickMs)
