@@ -41,9 +41,9 @@ namespace ProtoSocket.Coders
         /// </summary>
         /// <param name="reader">The pipe reader.</param>
         /// <param name="ctx">The coder context.</param>
-        /// <param name="frames">The frames.</param>
+        /// <param name="frame">The frames.</param>
         /// <returns></returns>
-        public bool Read(PipeReader reader, CoderContext<TFrame> ctx, out IEnumerable<TFrame> frames) {
+        public bool Read(PipeReader reader, CoderContext<TFrame> ctx, out TFrame frame) {
             while (reader.TryRead(out ReadResult result)) {
                 // check if the pipe is completed
                 if (result.IsCompleted)
@@ -85,7 +85,7 @@ namespace ProtoSocket.Coders
                                 // reset the state
                                 Reset();
 
-                                frames = new TFrame[] { ToFrame(_framePayload) };
+                                frame = ToFrame(_framePayload);
                                 return true;
                             }
                         }
@@ -96,7 +96,7 @@ namespace ProtoSocket.Coders
             }
 
             // we didn't get any complete frames in this read
-            frames = Enumerable.Empty<TFrame>();
+            frame = null;
             return false;
         }
 

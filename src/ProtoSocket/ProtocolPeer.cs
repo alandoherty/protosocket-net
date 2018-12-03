@@ -739,14 +739,17 @@ namespace ProtoSocket
             };
 
             // the internal read buffer
-            byte[] buffer = new byte[1024];
-            int bufferRead = 0;
+            byte[] readBuffer = new byte[1024];
+            int readBufferCount = 0;
+
+            // the internal frame buffer
+            List<TFrame> frameBuffer = new List<TFrame>(16);
 
             while (_disposed == 0) {
                 try {
                     // read stream into pipe
                     try {
-                        bufferRead = await _dataStream.ReadAsync(buffer, 0, buffer.Length, _disposeSource.Token).ConfigureAwait(false);
+                        readBufferCount = await _dataStream.ReadAsync(readBuffer, 0, readBuffer.Length, _disposeSource.Token).ConfigureAwait(false);
                     } catch (OperationCanceledException ex) {
                         if (ex.CancellationToken == _disposeSource.Token) {
                             _closeReason = "Peer disposed before incoming frame decoded";
@@ -760,29 +763,28 @@ namespace ProtoSocket
                     }
 
                     // check if end of stream has been reached
-                    if (bufferRead == 0) {
+                    if (readBufferCount == 0) {
                         Abort("End of stream");
                         return;
                     }
 
                     // write to pipe
-                    await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(buffer, 0, bufferRead)).ConfigureAwait(false);
+                    await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(readBuffer, 0, readBufferCount)).ConfigureAwait(false);
 
                     // try and process the incoming data into frames
-                    bool processedFrame = false;
-                    IEnumerable<TFrame> processedFrames = null;
-
                     try {
-                        processedFrame = _coder.Read(_pipeReader, new CoderContext<TFrame>(this), out processedFrames);
+                        while (_coder.Read(_pipeReader, new CoderContext<TFrame>(this), out TFrame frame))
+                            frameBuffer.Add(frame);
                     } catch(Exception ex) {
                         _closeReason = (ex is ProtocolCoderException) ? "Failed to decode incoming frame" : "Exception occured while decoding frame";
                         _closeException = ex;
-                        break;
+                        Abort(_closeReason, _closeException);
+                        return;
                     }
 
                     // if we found at least one frame lets process them
-                    if (processedFrame) {
-                        foreach(TFrame frame in processedFrames) {
+                    if (frameBuffer.Count > 0) {
+                        foreach(TFrame frame in frameBuffer) {
                             // increment stat
                             _statFramesIn++;
 
@@ -847,6 +849,9 @@ namespace ProtoSocket
                             }
                         }
                     }
+
+                    // clear frame buffer
+                    frameBuffer.Clear();
                 } catch (Exception ex) {
                     Abort("Unexpected exception during read", ex);
                     return;

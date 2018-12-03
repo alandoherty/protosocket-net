@@ -33,16 +33,14 @@ namespace Example.Minecraft.Net
 
         private ReadState _state;
         private PacketId _packetId;
-        private byte[] _packetPayload;
-        private int _packetPayloadOffset;
+        private int _packetLength;
 
         /// <summary>
         /// Resets the coder state.
         /// </summary>
         public void Reset() {
             _state = ReadState.PacketId;
-            _packetPayloadOffset = 0;
-            _packetPayload = null;
+            _packetLength = 0;
         }
 
         /// <summary>
@@ -79,9 +77,7 @@ namespace Example.Minecraft.Net
             }
         }
 
-        public bool Read(PipeReader reader, CoderContext<ClassicPacket> ctx, out IEnumerable<ClassicPacket> frames) {
-            List<ClassicPacket> inFrames = new List<ClassicPacket>(1);
-
+        public bool Read(PipeReader reader, CoderContext<ClassicPacket> ctx, out ClassicPacket frame) {
             while(reader.TryRead(out ReadResult result)) {
                 // check if the pipe is completed
                 if (result.IsCompleted)
@@ -90,53 +86,40 @@ namespace Example.Minecraft.Net
                 // get the sequence buffer
                 ReadOnlySequence<byte> buffer = result.Buffer;
 
-                if (_state == ReadState.PacketId) {
-                    // read in the packet id and setup the payload state
-                    _packetId = (PacketId)buffer.First.Span[0];
-                    _packetPayload = new byte[PacketSizes[_packetId]];
-                    _state = ReadState.Payload;
+                try {
+                    while (buffer.Length > 0) {
+                        if (_state == ReadState.PacketId) {
+                            // read in the packet id and setup the payload state
+                            _packetId = (PacketId)buffer.First.Span[0];
+                            _packetLength = PacketSizes[_packetId];
+                            _state = ReadState.Payload;
 
-                    // advance by one byte
-                    reader.AdvanceTo(buffer.GetPosition(1));
-                } else if (_state == ReadState.Payload) {
-                    int advancedBytes = 0;
+                            // increment buffer
+                            buffer = buffer.Slice(1);
+                        } else if (_state == ReadState.Payload) {
+                            if (buffer.Length >= _packetLength) {
+                                // to array
+                                byte[] packetPayload = buffer.Slice(0, _packetLength).ToArray();
+                                
+                                // increment the amount we were able to copy in
+                                buffer = buffer.Slice(_packetLength);
 
-                    try {
-                        foreach (ReadOnlyMemory<byte> seq in buffer) {
-                            // calculate the amount of needed data to complete this packet
-                            int neededBytes = _packetPayload.Length - _packetPayloadOffset;
-
-                            // calculate how much of this buffer we should copy, if the buffer is smaller than the amount we need we take the full buffer
-                            // otherwise we take as much as we can
-                            int copyBytes = Math.Min(seq.Length, neededBytes);
-
-                            // copy in the data we can get into the frame payload
-                            seq.Span.Slice(0, copyBytes).
-                                CopyTo(new Span<byte>(_packetPayload, _packetPayloadOffset, copyBytes));
-
-                            // increment the amount we were able to copy in
-                            advancedBytes += copyBytes;
-                            _packetPayloadOffset += copyBytes;
-
-                            // if we have a complete frame, return it
-                            if (_packetPayloadOffset == _packetPayload.Length) {
                                 // output the frames
-                                frames = new ClassicPacket[] { new ClassicPacket() { Id = _packetId, Payload = _packetPayload } };
+                                frame = new ClassicPacket() { Id = _packetId, Payload = packetPayload };
 
                                 // reset the state
                                 Reset();
-
                                 return true;
                             }
                         }
-                    } finally {
-                        reader.AdvanceTo(buffer.GetPosition(advancedBytes));
                     }
+                } finally {
+                    reader.AdvanceTo(buffer.GetPosition(0));
                 }
             }
 
-            // we didn't get any complete frames in this read
-            frames = Enumerable.Empty<ClassicPacket>();
+            // we didn't find a frame
+            frame = null;
             return false;
         }
     }
