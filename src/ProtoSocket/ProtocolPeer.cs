@@ -757,6 +757,9 @@ namespace ProtoSocket
                         } else if (ex.CancellationToken == _readCancelSource.Token) {
                             return;
                         }
+                    } catch (ObjectDisposedException) {
+                        Abort("End of stream");
+                        return;
                     } catch (Exception) {
                         _closeReason = "Failed to decode incoming frame";
                         throw;
