@@ -25,14 +25,5 @@ namespace ProtoSocket
         /// <param name="uri">The uri.</param>
         /// <returns></returns>
         Task ConnectAsync(Uri uri);
-
-        /// <summary>
-        /// Connects to the provided URI, only supports tcp:// scheme currently.
-        /// </summary>
-        /// <param name="uri">The endpoint.</param>
-        /// <param name="timeout">The timeout.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns></returns>
-        Task ConnectAsync(Uri uri, TimeSpan timeout, CancellationToken cancellationToken);
     }
 }

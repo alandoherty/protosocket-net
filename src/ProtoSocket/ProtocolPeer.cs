@@ -123,9 +123,9 @@ namespace ProtoSocket
         /// </summary>
         public bool KeepAlive {
             get {
-                return (bool)_client.Client.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive);
+                return (int)_client.Client.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) == 1;
             } set {
-                _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, value);
+                _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, value ? 1 : 0);
             }
         }
 
@@ -361,7 +361,7 @@ namespace ProtoSocket
         /// </summary>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
-        /// <exception cref="InvalidOperationException">If the peer is disconnecting, disconnected or connecting.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns>The number of sent frames.</returns>
@@ -371,7 +371,7 @@ namespace ProtoSocket
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
             else if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
-            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting || _state == ProtocolState.Connecting)
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
                 throw new InvalidOperationException("The peer is not ready to send frames");
 
             // wait for the send semaphore to become available, if cancelled we let the exception
@@ -395,7 +395,7 @@ namespace ProtoSocket
         /// <param name="frame">The frame.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
-        /// <exception cref="InvalidOperationException">If the peer is disconnecting, disconnected or connecting.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns>The number of sent frames.</returns>
@@ -405,7 +405,7 @@ namespace ProtoSocket
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
             else if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
-            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting || _state == ProtocolState.Connecting)
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
                 throw new InvalidOperationException("The peer is not ready to send frames");
 
             // wait for the send semaphore to become available, if cancelled we let the exception
@@ -432,7 +432,7 @@ namespace ProtoSocket
         /// <param name="frames">The frames.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
-        /// <exception cref="InvalidOperationException">If the peer is disconnecting, disconnected or connecting.</exception>
+        /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns>The number of sent frames.</returns>
@@ -442,7 +442,7 @@ namespace ProtoSocket
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
             else if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
-            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting || _state == ProtocolState.Connecting)
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
                 throw new InvalidOperationException("The peer is not ready to send frames");
 
             // wait for the send semaphore to become available, if cancelled we let the exception
@@ -820,7 +820,7 @@ namespace ProtoSocket
                                 if (receiveSource.TrySetResult(frame))
                                     continue;
                             }
-
+                          
                             // if the frame was observed, if not we know to add it to the queue
                             bool wasObserved = false;
 
