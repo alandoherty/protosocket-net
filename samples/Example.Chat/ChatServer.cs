@@ -7,7 +7,7 @@ namespace Example.Chat
 {
     public class ChatServer : ProtocolServer<ChatConnection, ChatMessage>
     {
-        public ChatServer() : base(new ChatCoder()) {
+        public ChatServer() : base((p) => new ChatCoder()) {
         }
     }
 }

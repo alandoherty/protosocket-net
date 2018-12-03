@@ -51,9 +51,9 @@ namespace ProtoSocket
         /// Creates a new protocol connection with the provided coder.
         /// </summary>
         /// <param name="server">The server.</param>
-        /// <param name="coder">The coder.</param>
-        public ProtocolConnection(ProtocolServer<TConnection, TFrame> server, IProtocolCoder<TFrame> coder)
-            : base(coder) {
+        /// <param name="coderFactory">The coder factory.</param>
+        public ProtocolConnection(ProtocolServer<TConnection, TFrame> server, ProtocolCoderFactory<TFrame> coderFactory)
+            : base(coderFactory) {
             _server = server;
         }
         #endregion

@@ -7,7 +7,7 @@ namespace Example.Minecraft.Net
 {
     public class ClassicConnection : ProtocolConnection<ClassicConnection, ClassicPacket>
     {
-        public ClassicConnection(ProtocolServer<ClassicConnection, ClassicPacket> server, IProtocolCoder<ClassicPacket> coder) : base(server, coder) {
+        public ClassicConnection(ProtocolServer<ClassicConnection, ClassicPacket> server, ProtocolCoderFactory<ClassicPacket> coderFactory) : base(server, coderFactory) {
 
         }
     }

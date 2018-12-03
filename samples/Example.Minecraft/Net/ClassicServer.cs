@@ -12,7 +12,7 @@ namespace Example.Minecraft.Net
     public class ClassicServer : ProtocolServer<ClassicConnection, ClassicPacket>
     {
         #region Constructors
-        public ClassicServer(Uri uri) : base (new ClassicCoder()) {
+        public ClassicServer(Uri uri) : base ((p) => new ClassicCoder()) {
             Configure(uri);
         }
         #endregion

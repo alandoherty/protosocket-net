@@ -7,7 +7,7 @@ namespace Example.Chat
 {
     public class ChatConnection : ProtocolConnection<ChatConnection, ChatMessage>
     {
-        public ChatConnection(ProtocolServer<ChatConnection, ChatMessage> server, IProtocolCoder<ChatMessage> coder) : base(server, coder) {
+        public ChatConnection(ProtocolServer<ChatConnection, ChatMessage> server, ProtocolCoderFactory<ChatMessage> coderFactory) : base(server, coderFactory) {
         }
     }
 }
