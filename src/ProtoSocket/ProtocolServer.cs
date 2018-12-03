@@ -26,7 +26,7 @@ namespace ProtoSocket
         private IConnectionFilter _filter;
         private List<TConnection> _connections = new List<TConnection>();
         private List<TConnection> _connectionsAnnounced = new List<TConnection>();
-        private IProtocolCoder<TFrame> _coder;
+        private ProtocolCoderFactory<TFrame> _coderFactory;
         private Uri _endpoint;
 
         private CancellationTokenSource _stopSource;
@@ -170,7 +170,7 @@ namespace ProtoSocket
             }
 
             // create connection
-            TConnection connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coder);
+            TConnection connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coderFactory);
 
             // add events
             connection.Connected += delegate (object o, PeerConnectedEventArgs<TFrame> e) {
@@ -293,13 +293,13 @@ namespace ProtoSocket
         /// <summary>
         /// Creates a new protocol server.
         /// </summary>
-        /// <param name="coder">The protocol coder.</param>
-        public ProtocolServer(IProtocolCoder<TFrame> coder) {
+        /// <param name="coderFactory">The protocol coder factory.</param>
+        public ProtocolServer(ProtocolCoderFactory<TFrame> coderFactory) {
             // check coder isn't null
-            if (coder == null)
-                throw new ArgumentNullException(nameof(coder), "The coder cannot be null");
+            if (coderFactory == null)
+                throw new ArgumentNullException(nameof(coderFactory), "The coder factory cannot be null");
 
-            _coder = coder;
+            _coderFactory = coderFactory;
         }
         #endregion
     }

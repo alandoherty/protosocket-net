@@ -1130,6 +1130,14 @@ namespace ProtoSocket
         protected ProtocolPeer(IProtocolCoder<TFrame> coder) {
             _coder = coder;
         }
+
+        /// <summary>
+        /// Creates an uninitialized protocol peer.
+        /// </summary>
+        /// <param name="coderFactory">The protocol coder factory.</param>
+        protected ProtocolPeer(ProtocolCoderFactory<TFrame> coderFactory) {
+            _coder = coderFactory(this);
+        }
         #endregion
     }
 
