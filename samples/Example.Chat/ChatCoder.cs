@@ -21,7 +21,7 @@ namespace Example.Chat
         private byte[] _messageBytes;
         private int _messageBytesOffset;
 
-        public bool Read(PipeReader reader, out IEnumerable<ChatMessage> frames) {
+        public bool Read(PipeReader reader, CoderContext<ChatMessage> ctx, out IEnumerable<ChatMessage> frames) {
             while (reader.TryRead(out ReadResult result)) {
                 // check if the pipe is completed
                 if (result.IsCompleted)

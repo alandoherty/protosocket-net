@@ -79,7 +79,7 @@ namespace Example.Minecraft.Net
             }
         }
 
-        public bool Read(PipeReader reader, out IEnumerable<ClassicPacket> frames) {
+        public bool Read(PipeReader reader, CoderContext<ClassicPacket> ctx, out IEnumerable<ClassicPacket> frames) {
             while(reader.TryRead(out ReadResult result)) {
                 // check if the pipe is completed
                 if (result.IsCompleted)

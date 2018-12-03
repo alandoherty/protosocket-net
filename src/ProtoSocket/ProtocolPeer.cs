@@ -130,7 +130,7 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Gets or sets if TCP no delay is enabled.`
+        /// Gets or sets if TCP no delay is enabled.
         /// </summary>
         public bool NoDelay {
             get {
@@ -237,7 +237,7 @@ namespace ProtoSocket
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
         /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
         /// <returns>The total number of queued frames.</returns>
-        public int Queue(IEnumerable<TFrame> frames) {
+        public virtual int Queue(IEnumerable<TFrame> frames) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -271,7 +271,7 @@ namespace ProtoSocket
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
         /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
         /// <returns>The total number of queued frames.</returns>
-        public int Queue(TFrame frame) {
+        public virtual int Queue(TFrame frame) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -293,7 +293,7 @@ namespace ProtoSocket
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
         /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
         /// <returns>A task which will complete once the frame is sent.</returns>
-        public Task QueueAsync(TFrame frame) {
+        public virtual Task QueueAsync(TFrame frame) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -365,7 +365,7 @@ namespace ProtoSocket
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns>The number of sent frames.</returns>
-        public async Task<int> SendAsync(CancellationToken cancellationToken = default(CancellationToken)) {
+        public virtual async Task<int> SendAsync(CancellationToken cancellationToken = default(CancellationToken)) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -399,7 +399,7 @@ namespace ProtoSocket
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns>The number of sent frames.</returns>
-        public async Task<int> SendAsync(TFrame frame, CancellationToken cancellationToken = default(CancellationToken)) {
+        public virtual async Task<int> SendAsync(TFrame frame, CancellationToken cancellationToken = default(CancellationToken)) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -436,7 +436,7 @@ namespace ProtoSocket
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns>The number of sent frames.</returns>
-        public async Task<int> SendAsync(IEnumerable<TFrame> frames, CancellationToken cancellationToken = default(CancellationToken)) {
+        public virtual async Task<int> SendAsync(IEnumerable<TFrame> frames, CancellationToken cancellationToken = default(CancellationToken)) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -489,7 +489,7 @@ namespace ProtoSocket
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <exception cref="TimeoutException">If the operation has timed out.</exception>
         /// <returns>The received frame.</returns>
-        public async Task<TFrame> ReceiveAsync(TimeSpan timeout, CancellationToken cancellationToken = default(CancellationToken)) {
+        public virtual async Task<TFrame> ReceiveAsync(TimeSpan timeout, CancellationToken cancellationToken = default(CancellationToken)) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -773,7 +773,7 @@ namespace ProtoSocket
                     IEnumerable<TFrame> processedFrames = null;
 
                     try {
-                        processedFrame = _coder.Read(_pipeReader, out processedFrames);
+                        processedFrame = _coder.Read(_pipeReader, new CoderContext<TFrame>(this), out processedFrames);
                     } catch(Exception ex) {
                         _closeReason = (ex is ProtocolCoderException) ? "Failed to decode incoming frame" : "Exception occured while decoding frame";
                         _closeException = ex;

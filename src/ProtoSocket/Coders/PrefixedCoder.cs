@@ -40,9 +40,10 @@ namespace ProtoSocket.Coders
         /// Reads the prefixed frame from the pipe.
         /// </summary>
         /// <param name="reader">The pipe reader.</param>
+        /// <param name="ctx">The coder context.</param>
         /// <param name="frames">The frames.</param>
         /// <returns></returns>
-        public bool Read(PipeReader reader, out IEnumerable<TFrame> frames) {
+        public bool Read(PipeReader reader, CoderContext<TFrame> ctx, out IEnumerable<TFrame> frames) {
             while (reader.TryRead(out ReadResult result)) {
                 // check if the pipe is completed
                 if (result.IsCompleted)
