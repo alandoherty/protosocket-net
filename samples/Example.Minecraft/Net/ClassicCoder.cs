@@ -112,7 +112,7 @@ namespace Example.Minecraft.Net
                         }
                     }
                 } finally {
-                    reader.AdvanceTo(buffer.GetPosition(0));
+                    reader.AdvanceTo(buffer.GetPosition(0), buffer.End);
                 }
             }
 
