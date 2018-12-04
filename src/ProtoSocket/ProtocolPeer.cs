@@ -711,11 +711,11 @@ namespace ProtoSocket
             // dispose client
             OnStateChanged(new PeerStateChangedEventArgs<TFrame>() {
                 OldState = _state,
-                NewState = ProtocolState.Disconnected
+                NewState = ProtocolState.Disconnecting
             });
 
             // set disconnected
-            _state = ProtocolState.Disconnected;
+            _state = ProtocolState.Disconnecting;
 
             // remove all subscriptions mark as error
             lock(_subscriptions) {

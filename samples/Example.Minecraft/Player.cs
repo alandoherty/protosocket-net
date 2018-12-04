@@ -181,13 +181,17 @@ namespace Example.Minecraft
             List<Task> sendTasks = new List<Task>();
 
             foreach (Player p in _world.Players) {
-                ClassicPacket spawnPacket = new ClassicPacket();
-                spawnPacket.Id = PacketId.DespawnPlayer;
+                if (p.Connection.IsConnected) {
+                    ClassicPacket spawnPacket = new ClassicPacket();
+                    spawnPacket.Id = PacketId.DespawnPlayer;
 
-                PacketWriter spawnWriter = new PacketWriter();
-                spawnWriter.WriteSByte(this == p ? (sbyte)-1 : ID);
+                    PacketWriter spawnWriter = new PacketWriter();
+                    spawnWriter.WriteSByte(this == p ? (sbyte)-1 : ID);
 
-                p.Connection.Queue(spawnPacket);
+                    try {
+                        p.Connection.Queue(spawnPacket);
+                    } catch (ObjectDisposedException) { }
+                }
             }
         }
 
