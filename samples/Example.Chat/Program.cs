@@ -12,9 +12,6 @@ namespace Example.Chat
     {
         static void Main(string[] args)
         {
-            Task.WhenAny(RunServerAsync(args),
-            RunClientAsync(new string[] { "", "Kevin Bacon" })).Wait();
-
             if (args.Length == 0)
                 Console.Error.WriteLine("Example.Chat.exe <server|client> [name]");
             else if (args[0].Equals("server", StringComparison.CurrentCultureIgnoreCase))
@@ -25,7 +22,7 @@ namespace Example.Chat
 
         static Task RunServerAsync(string[] args) {
             ChatServer server = new ChatServer();
-            server.Configure(new Uri("tcp://127.0.0.1:6060"));
+            server.Configure(new Uri("tcp://0.0.0.0:6060"));
 
             // setup events
             server.Connected += async (s, e) => {
@@ -43,6 +40,7 @@ namespace Example.Chat
                         } catch (Exception) { }
                 }
 
+              
                 e.Peer.Received += async (ss, ee) => {
                     if (ee.Frame.Text == "/list") {
                         string[] ips = server.Connections.Select(c => "\t" + c.RemoteEndPoint.ToString()).ToArray();

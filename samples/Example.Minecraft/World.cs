@@ -419,7 +419,7 @@ namespace Example.Minecraft
                             connection.Queue(new ClassicPacket() { Id = PacketId.Ping, Payload = new byte[0] });
 
                         // send all queued frames
-                        sendTasks.Add(connection.SendAsync());
+                        sendTasks.Add(connection.FlushAsync());
                     }
                 }
 

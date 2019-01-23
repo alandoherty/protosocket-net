@@ -119,6 +119,15 @@ namespace ProtoSocket
         }
 
         /// <summary>
+        /// Gets the close exception, if any.
+        /// </summary>
+        public Exception CloseException {
+            get {
+                return _closeException;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets if to enable TCP keep alive.
         /// </summary>
         public bool KeepAlive {
@@ -231,7 +240,7 @@ namespace ProtoSocket
 
         #region Queued Sending
         /// <summary>
-        /// Queues the frames to be sent, this will happen on the next call to <see cref="SendAsync(CancellationToken)"/>. 
+        /// Queues the frames to be sent, this will happen on the next call to <see cref="FlushAsync(CancellationToken)"/>. 
         /// </summary>
         /// <param name="frames">The frames.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
@@ -254,7 +263,7 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Queues the frames to be sent, this will happen on the next call to <see cref="SendAsync(CancellationToken)"/>. 
+        /// Queues the frames to be sent, this will happen on the next call to <see cref="FlushAsync(CancellationToken)"/>. 
         /// </summary>
         /// <param name="frames">The frames.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
@@ -265,7 +274,7 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Queues the frame to be sent, this will happen on the next call to <see cref="SendAsync(CancellationToken)"/>.
+        /// Queues the frame to be sent, this will happen on the next call to <see cref="FlushAsync(CancellationToken)"/>.
         /// </summary>
         /// <param name="frame">The frame.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
@@ -287,7 +296,7 @@ namespace ProtoSocket
 
         /// <summary>
         /// Queues the frame to be sent and returns a task which will complete after sending.
-        /// The frame will be sent on the next call to <see cref="SendAsync(CancellationToken)"/>.
+        /// The frame will be sent on the next call to <see cref="FlushAsync(CancellationToken)"/>.
         /// </summary>
         /// <param name="frame">The frame.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
@@ -357,7 +366,7 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Sends all queued frames asyncronously.
+        /// Flushes all queued frames asyncronously.
         /// </summary>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
@@ -365,7 +374,7 @@ namespace ProtoSocket
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns>The number of sent frames.</returns>
-        public virtual async Task<int> SendAsync(CancellationToken cancellationToken = default(CancellationToken)) {
+        public virtual async Task<int> FlushAsync(CancellationToken cancellationToken = default(CancellationToken)) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
@@ -752,17 +761,17 @@ namespace ProtoSocket
                         readBufferCount = await _dataStream.ReadAsync(readBuffer, 0, readBuffer.Length, _disposeSource.Token).ConfigureAwait(false);
                     } catch (OperationCanceledException ex) {
                         if (ex.CancellationToken == _disposeSource.Token) {
-                            _closeReason = "Peer disposed before incoming frame decoded";
-                            throw;
+                            Abort("Peer disposed before incoming frame decoded", ex);
                         } else if (ex.CancellationToken == _readCancelSource.Token) {
-                            return;
                         }
-                    } catch (ObjectDisposedException) {
-                        Abort("End of stream");
+
                         return;
-                    } catch (Exception) {
-                        _closeReason = "Failed to decode incoming frame";
-                        throw;
+                    } catch (ObjectDisposedException ex) {
+                        Abort("End of stream", ex);
+                        return;
+                    } catch (Exception ex) {
+                        Abort($"Read exception: {ex.Message}");
+                        return;
                     }
 
                     // check if end of stream has been reached
@@ -971,8 +980,8 @@ namespace ProtoSocket
 
             // remove all subscriptions mark as completeds
             lock (_subscriptions) {
-                foreach (IObserver<TFrame> observer in _subscriptions) {
-                    observer.OnCompleted();
+                foreach (Subscription sub in _subscriptions) {
+                    sub.Observer.OnCompleted();
                 }
 
                 _subscriptions.Clear();
