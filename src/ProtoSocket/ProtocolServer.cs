@@ -36,7 +36,7 @@ namespace ProtoSocket
         /// <summary>
         /// Gets or sets the connection filter, if any.
         /// </summary>
-        public IConnectionFilter ConnectionFilter {
+        public IConnectionFilter Filter {
             get {
                 return _filter;
             } set {
@@ -150,14 +150,16 @@ namespace ProtoSocket
             // filter
             if (_filter != null) {
                 bool allow = false;
+                IncomingContext incomingCtx = new IncomingContext() {
+                    Server = this,
+                    RemoteEndPoint = client.Client.RemoteEndPoint
+                };
 
                 try {
-                    if (_filter is IAsyncConnectionFilter)
-                        allow = await (_filter as IAsyncConnectionFilter).FilterAsync(client, _stopSource.Token).ConfigureAwait(false);
-                    else if (_filter is IConnectionFilter)
-                        allow = _filter.Filter(client);
+                    if (_filter.IsAsynchronous)
+                        allow = await _filter.FilterAsync(incomingCtx, _stopSource.Token).ConfigureAwait(false);
                     else
-                        throw new NotSupportedException("The connection filter is not supported");
+                        allow = _filter.Filter(incomingCtx);
                 } catch (OperationCanceledException) {
                     return;
                 }

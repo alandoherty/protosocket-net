@@ -9,7 +9,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Example.Minecraft.Net.Packets;
 using ProtoSocket;
-using ProtoSocket.Extensions;
 
 namespace Example.Minecraft.Net
 {

@@ -12,7 +12,7 @@ namespace ProtoSocket
         /// <summary>
         /// Gets or sets the connection filter, if any.
         /// </summary>
-        IConnectionFilter ConnectionFilter { get; set; }
+        IConnectionFilter Filter { get; set; }
 
         /// <summary>
         /// Gets the number of connections.

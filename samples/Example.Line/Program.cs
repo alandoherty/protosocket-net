@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ProtoSocket.Filters;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -23,7 +24,7 @@ namespace Example.Line
             LineServer server = new LineServer();
             server.Configure("tcp://0.0.0.0:6060");
             server.Start();
-
+            
             server.Connected += async (o, e) => {
                 e.Peer.Subscribe(new ConsoleObserver());
             };

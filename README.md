@@ -50,6 +50,14 @@ For the `Received` event, the event handler will always be called when no `Recei
 
 Finally if all other handlers have been called without conflict, any `IObserver<TFrame>` subscriptions will be called.
 
+### Coders
+
+In the newer version of ProtoSocket, coders are implemented using `System.IO.Pipelines`. The same high-performance library powering ASP.NET Kestrel.
+
+You can find a great tutorial on the .NET Blog [here](https://blogs.msdn.microsoft.com/dotnet/2018/07/09/system-io-pipelines-high-performance-io-in-net/). Examples are available inside the repository, [ChatCoder.cs](samples/Example.Chat/ChatCoder.cs) and [ClassicCoder.cs](samples/Example.Minecraft/Net/ClassicCoder.cs).
+
+Your implementation simply needs to call `PipeReader.TryRead`, processing as much data as possible and either returning a frame (and true), or false to indicate you haven't got a full frame yet. The underlying peer will continually call your read implementation until you are able to output no more frames.
+
 ### Queueing
 
 In many scenarios creating an asyncronous operation and waiting for every packet to be sent is not ideal, for these use cases you can use the `ProtocolPeer.Queue` and `ProtocolPeer.QueueAsync` methods.
@@ -67,13 +75,25 @@ Task message3 = peer.QueueAsync(new ChatMessage() { Text = "I like eBooks too" }
 await Task.WhenAll(message1, message2, message3);
 ``` 
 
-### Coders
+### Filters
 
-In the newer version of ProtoSocket, coders are implemented using `System.IO.Pipelines`. The same high-performance library powering ASP.NET Kestrel.
+You can selectively decline incoming connections by adding a filter to the `ProtocolServer` object. If filtered, the connection will not be added to the server and the socket will be closed instantly.
 
-You can find a great tutorial on the .NET Blog [here](https://blogs.msdn.microsoft.com/dotnet/2018/07/09/system-io-pipelines-high-performance-io-in-net/). Examples are available inside the repository, [ChatCoder.cs](samples/Example.Chat/ChatCoder.cs) and [ClassicCoder.cs](samples/Example.Minecraft/Net/ClassicCoder.cs).
+A filter can be created manually by implementing `IConnectionFilter`, or you can use the premade classes `AsyncConnectionFilter`/`ConnectionFilter` which accept a delegate as their constructor.
 
-Your implementation simply needs to call `PipeReader.TryRead`, processing as much data as possible and either returning a frame (and true), or false to indicate you haven't got a full frame yet. The underlying peer will continually call your read implementation until you are able to output no more frames.
+```csharp
+server.Filter = new ConnectionFilter(ctx => ((IPEndPoint)ctx.RemoteEndPoint).Address != IPAddress.Parse("192.168.0.2"));
+```
+
+You can optionally use the asyncronous filter, which will allow you to accept other connections in the background while processing your filter.
+
+```csharp
+server.Filter = new AsyncConnectionFilter(async (ctx, ct) => {
+	await Task.Delay(3000);
+	return false;
+});
+
+```
 
 ## Contributing
 
