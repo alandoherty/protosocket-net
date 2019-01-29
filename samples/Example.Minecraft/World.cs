@@ -461,6 +461,8 @@ namespace Example.Minecraft
             e.Peer.NoDelay = true;
             e.Peer.KeepAlive = true;
 
+            Console.WriteLine(e.Peer.RemoteEndPoint + " incoming connection");
+
             // receive identification
             ClassicPacket packet = await e.Peer.ReceiveAsync();
 

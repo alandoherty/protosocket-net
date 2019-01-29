@@ -64,14 +64,15 @@ In many scenarios creating an asyncronous operation and waiting for every packet
 
 Queueing a packet does not provide any guarentee it will be sent in a timely fashion, it is up to you to call `ProtocolPeer.SendAsync`/`ProtocolPeer.FlushAsync` for any queued packets to be sent. If you want to queue packets but need to confirm or wait until they have been sent, you can use the `ProtocolPeer.QueueAsync` method.
 
-This allows you to batch multiple frames together while still waiting until they are sent.
+This allows you to batch multiple frames together while still waiting until they are sent, the order will be retained. While the peer is thread-safe you will need to perform your own synchronization while queueing/sending to guarentee the order.
 
 ```csharp
 Task message1 = peer.QueueAsync(new ChatMessage() { Text = "I like books" });
 Task message2 = peer.QueueAsync(new ChatMessage() { Text = "I like books alot" });
 Task message3 = peer.QueueAsync(new ChatMessage() { Text = "I like eBooks too" });
 
-// you must call peer.SendAsync for these messages to be sent
+// you can either call peer.FlushAsync or wait until the next call to peer.SendAsync(TFrame/TFrame[]/etc)
+await peer.FlushAsync();
 await Task.WhenAll(message1, message2, message3);
 ``` 
 
