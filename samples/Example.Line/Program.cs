@@ -1,4 +1,5 @@
-﻿using ProtoSocket.Filters;
+﻿using ProtoSocket;
+using ProtoSocket.Filters;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,7 +18,7 @@ namespace Example.Line
             Console.WriteLine(value);
         }
     }
-
+    
     class Program
     {
         static async Task Main(string[] args) {
@@ -25,7 +26,7 @@ namespace Example.Line
             server.Configure("tcp://0.0.0.0:6060");
             server.Start();
             
-            server.Connected += async (o, e) => {
+            server.Connected += (o, e) => {
                 e.Peer.Subscribe(new ConsoleObserver());
             };
 
@@ -38,8 +39,6 @@ namespace Example.Line
 
                 await Task.Delay(2000);
             }
-
-            await Task.Delay(Timeout.InfiniteTimeSpan);
         }
     }
 }

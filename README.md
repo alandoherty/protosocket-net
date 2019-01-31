@@ -38,7 +38,7 @@ In the Minecraft example, you can type `/text Moi moi or /texta Moi moi` for 3D 
 
 ## Usage
 
-Overall the library makes use of the concept of peers, which can represent a inbound connection or an outgoing client connection. You can use `Peer.Side` to determine if a peer is a client or server connection. The library provides three ways of receiving packets from the opposing peer, it is safe to use all at once if your application requires.
+In ProtoSocket, sockets are represented as peers, which can be either an inbound connection or an outgoing client connection. You can use `Peer.Side` to determine if a peer is a client or server connection. The library provides three ways of receiving packets from the opposing peer, it is safe to use all at once if your application requires.
 
 - `IObserver<TFrame>` subscriptions
 - `Peer.Received` event
@@ -60,7 +60,7 @@ Your implementation simply needs to call `PipeReader.TryRead`, processing as muc
 
 ### Queueing
 
-In many scenarios creating an asyncronous operation and waiting for every packet to be sent is not ideal, for these use cases you can use the `ProtocolPeer.Queue` and `ProtocolPeer.QueueAsync` methods.
+In many scenarios creating an asynchronous operation and waiting for every packet to be sent is not ideal, for these use cases you can use the `ProtocolPeer.Queue` and `ProtocolPeer.QueueAsync` methods.
 
 Queueing a packet does not provide any guarentee it will be sent in a timely fashion, it is up to you to call `ProtocolPeer.SendAsync`/`ProtocolPeer.FlushAsync` for any queued packets to be sent. If you want to queue packets but need to confirm or wait until they have been sent, you can use the `ProtocolPeer.QueueAsync` method.
 
@@ -71,10 +71,38 @@ Task message1 = peer.QueueAsync(new ChatMessage() { Text = "I like books" });
 Task message2 = peer.QueueAsync(new ChatMessage() { Text = "I like books alot" });
 Task message3 = peer.QueueAsync(new ChatMessage() { Text = "I like eBooks too" });
 
-// you can either call peer.FlushAsync or wait until the next call to peer.SendAsync(TFrame/TFrame[]/etc)
-await peer.FlushAsync();
+// you can either call peer.FlushAsync elsewhere or wait until the next call to peer.SendAsync(TFrame/TFrame[]/etc)
 await Task.WhenAll(message1, message2, message3);
 ``` 
+
+### Modes
+
+In the newer versions of ProtoSocket you can now create peers in either `Active` or `Passive` mode. In Active mode the peers act 
+
+### Upgrading/SSL
+
+In many scenarios you will want to perform an upgrade of the underlying transport connection, for example to support TLS/SSL connections. ProtoSocket provides an easy means of doing this via the `IProtocolUpgrader<TFrame>` interface. Upgrading a connection for versioned protocols, or changing the frame type is not supported and not the target use case of the upgrade API.
+
+To upgrade the connection to SSL for example, use the pre-built `SslUpgrader` class. Note that flushing or sending frames on the peer will trigger an `InvalidOperationException`. You can queue frames however.
+
+```
+SslUpgrader upgrader = new SslUpgrader("www.google.com");
+upgrader.Protocols = SslProtocols.Tls | SslProtocols.Tls11;
+await peer.UpgradeAsync(upgrader);
+
+await peer.SendAsync(new ChatMessage() { Text = "Encrypted chat message!" });
+```
+
+You can also upgrade explicitly after connecting, preventing the underlying read loop from accidently interpreting upgraded traffic.
+
+```
+ProtocolClient client = new ProtocolClient(new MyCoder(), ProtocolMode.Passive);
+SslUpgrader upgrader = new SslUpgrader("www.google.com");
+upgrader.Protocols = SslProtocols.Tls | SslProtocols.Tls11;
+
+await client.UpgradeAsync(upgrader);
+client.Mode = ProtocolMode.Active;
+```
 
 ### Filters
 
@@ -93,7 +121,27 @@ server.Filter = new AsyncConnectionFilter(async (ctx, ct) => {
 	await Task.Delay(3000);
 	return false;
 });
+```
 
+### Reusing Frames
+
+In some cases you may want to pool/optimise your frames in such a way that managed buffers are reused between frames. You can achieve this by implementing `IDisposable`, which will result in `Dispose` being called automatically when the frame is flushed to the opposing peer. Allowing you to take back any resources for use by other frames. The peer will not dispose a frame after receiving, it is up to you to call `Dispose` when you have processed the frame.
+
+```csharp
+public struct PooledFrame : IDisposable
+{
+	public byte[] Buffer { get; set; }
+	public int Size { get; set; }
+
+	public void Dispose() {
+		ArrayPool<byte>.Shared.Return(Buffer);
+	}
+
+	public PooledFrame(int bufferSize) {
+		Buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
+		Size = bufferSize;
+	}
+}
 ```
 
 ## Contributing

@@ -12,7 +12,6 @@ namespace ProtoSocket
     /// Represents the base interface for encoding and decoding.
     /// </summary>
     public interface IProtocolCoder<TFrame>
-        where TFrame : class
     {
         /// <summary>
         /// Resets the coder to it's initial state.
@@ -30,13 +29,12 @@ namespace ProtoSocket
         bool Read(PipeReader reader, CoderContext<TFrame> ctx, out TFrame frame);
 
         /// <summary>
-        /// Write the frame to the stream asyncronously.
+        /// Write the frame to the stream.
         /// </summary>
         /// <param name="stream">The stream.</param>
         /// <param name="frame">The frame object.</param>
         /// <param name="ctx">The coder context.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns></returns>
-        Task WriteAsync(Stream stream, TFrame frame, CoderContext<TFrame> ctx, CancellationToken cancellationToken);
+        void Write(Stream stream, TFrame frame, CoderContext<TFrame> ctx);
     }
 }

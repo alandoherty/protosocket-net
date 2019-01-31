@@ -15,6 +15,11 @@ namespace ProtoSocket
         IConnectionFilter Filter { get; set; }
 
         /// <summary>
+        /// Gets the endpoint the server is listening on.
+        /// </summary>
+        IEnumerable<Uri> Endpoints { get; }
+
+        /// <summary>
         /// Gets the number of connections.
         /// </summary>
         int Count { get; }
@@ -35,10 +40,5 @@ namespace ProtoSocket
         /// Starts listening for connections.
         /// </summary>
         void Start();
-
-        /// <summary>
-        /// Stops listening for connections.
-        /// </summary>
-        void Stop();
     }
 }

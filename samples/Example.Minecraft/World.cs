@@ -13,6 +13,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -200,18 +201,8 @@ namespace Example.Minecraft
         }
 
         public void SetBlock(int x, int y, int z, byte blockId) {
-            // validate coordinates
-            if (x < 0 || x > 256)
-                throw new ArgumentOutOfRangeException("The x-coordinate cannot be lower than zero or higher than 256");
-            if (y < 0 || y > 64)
-                throw new ArgumentOutOfRangeException("The y-coordinate cannot be lower than zero or higher than 64");
-            if (z < 0 || z > 256)
-                throw new ArgumentOutOfRangeException("The z-coordinate cannot be lower than zero or higher than 256");
-
             // set in level
-            lock (_level) {
-                _level[x + Depth * (z + Width * y)] = blockId;
-            }
+            _level[x + Depth * (z + Width * y)] = blockId;
 
             // update players
             foreach(Player p in Players) {
@@ -231,7 +222,7 @@ namespace Example.Minecraft
 
         public void MessageAll(string msg) {
             foreach (Player p in Players)
-                p.Message(-1, msg);
+                p.Message(msg);
         }
 
         public async void Save() {
@@ -258,12 +249,13 @@ namespace Example.Minecraft
                 playerWriter.Write((byte)0);
 
                 // write level data
-                using (GZipStream stream = new GZipStream(ms, CompressionLevel.Optimal)) {
+                using (DeflateStream stream = new DeflateStream(ms, CompressionLevel.Optimal)) {
                     await stream.WriteAsync(_level, 0, _level.Length);
                     await stream.FlushAsync();
                 }
 
                 await File.WriteAllBytesAsync("world.dat", ms.ToArray());
+                MessageAll("World saved");
             }
         }
 
@@ -283,7 +275,7 @@ namespace Example.Minecraft
                 // read level data
                 byte[] buffer = new byte[_level.Length];
 
-                using (GZipStream stream = new GZipStream(ms, CompressionMode.Decompress)) {
+                using (DeflateStream stream = new DeflateStream(ms, CompressionMode.Decompress)) {
                     int nRead = 0;
 
                     while ((nRead = stream.Read(buffer, nRead, buffer.Length - nRead)) > 0) {
@@ -291,18 +283,12 @@ namespace Example.Minecraft
                 }
 
                 _level = buffer;
+                MessageAll("World reloaded, rejoin!");
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public byte GetBlock(int x, int y, int z, byte blockId) {
-            // validate coordinates
-            if (x < 0 || x > 256)
-                throw new ArgumentOutOfRangeException("The x-coordinate cannot be lower than zero or higher than 256");
-            if (y < 0 || y > 64)
-                throw new ArgumentOutOfRangeException("The y-coordinate cannot be lower than zero or higher than 64");
-            if (z < 0 || z > 256)
-                throw new ArgumentOutOfRangeException("The z-coordinate cannot be lower than zero or higher than 256");
-
             return _level[x + Depth * (z + Width * y)];
         }
         #endregion
@@ -336,7 +322,7 @@ namespace Example.Minecraft
         public async Task RunAsync() {
             // create a stopwatch to keep track of the tick times and also log we started
             Stopwatch tickStopwatch = new Stopwatch();
-            Console.WriteLine($"Running Example.Minecraft at {_server.Endpoint}");
+            Console.WriteLine($"Running Example.Minecraft at {_server.Endpoints.First()}");
 
             // get tick rate
             int tickMs = (int)(1000 / TickRate);
@@ -352,6 +338,7 @@ namespace Example.Minecraft
                     Player player = incomingPacket.Item1;
 
                     switch (packet.Id) {
+                        // the player has changed there position and/or angle
                         case PacketId.PositionAngle:
                             PacketReader posAngReader = new PacketReader(packet.Payload);
                             posAngReader.ReadByte();
@@ -366,20 +353,27 @@ namespace Example.Minecraft
                             string msgText = msgReader.ReadString();
 
                             if (msgText.StartsWith('/')) {
-                                if (msgText.StartsWith("/clear", StringComparison.CurrentCultureIgnoreCase)) {
-                                    ClearText();
-                                } else if (msgText.StartsWith("/text ", StringComparison.CurrentCultureIgnoreCase)) {
-                                    ClearText();
-                                    DrawText(msgText.Substring(6));
-                                } else if (msgText.StartsWith("/texta ", StringComparison.CurrentCultureIgnoreCase)) {
-                                    ClearText();
-                                    DrawTextAnimated(msgText.Substring(7));
-                                } else if (msgText.StartsWith("/load", StringComparison.CurrentCultureIgnoreCase)) {
-                                    Load();
-                                } else if (msgText.StartsWith("/save", StringComparison.CurrentCultureIgnoreCase)) {
-                                    Save();
-                                } else {
-                                    player.Message(-1, "Unknown command");
+                                try {
+                                    if (msgText.StartsWith("/clear", StringComparison.CurrentCultureIgnoreCase)) {
+                                        ClearText();
+                                    } else if (msgText.StartsWith("/text ", StringComparison.CurrentCultureIgnoreCase)) {
+                                        ClearText();
+                                        DrawText(msgText.Substring(6));
+                                    } else if (msgText.StartsWith("/texta ", StringComparison.CurrentCultureIgnoreCase)) {
+                                        ClearText();
+                                        DrawTextAnimated(msgText.Substring(7));
+                                    } else if (msgText.StartsWith("/load", StringComparison.CurrentCultureIgnoreCase)) {
+                                        Load();
+                                    } else if (msgText.StartsWith("/save", StringComparison.CurrentCultureIgnoreCase)) {
+                                        Save();
+                                    } else if (msgText.StartsWith("/stats", StringComparison.CurrentCultureIgnoreCase)) {
+                                        player.Connection.GetStatistics(out PeerStatistics stats);
+                                        player.Message($"FI: {stats.FramesIn} FO: {stats.FramesOut} BI: {stats.BytesIn} BO: {stats.BytesOut} E: {Math.Round(stats.AliveSpan.TotalMilliseconds)}ms");
+                                    } else {
+                                        player.Message("Unknown command");
+                                    }
+                                } catch(Exception ex) {
+                                    player.Message($"Exception in command: {ex.Message}");
                                 }
                             } else {
                                 foreach (Player p in Players)
@@ -423,7 +417,7 @@ namespace Example.Minecraft
                     }
                 }
 
-                await Task.WhenAll(sendTasks);
+                await Task.WhenAll(sendTasks).ConfigureAwait(false);
 
                 // set next ping
                 if (_nextPing <= DateTime.UtcNow)
@@ -433,7 +427,7 @@ namespace Example.Minecraft
                 if (tickStopwatch.ElapsedMilliseconds > tickMs)
                     Console.WriteLine($"Server behind, took {tickStopwatch.ElapsedMilliseconds - tickMs}ms longer to process tick");
                 else
-                    await Task.Delay(tickMs - (int)tickStopwatch.ElapsedMilliseconds);
+                    await Task.Delay(tickMs - (int)tickStopwatch.ElapsedMilliseconds).ConfigureAwait(false);
             }
         }
         #endregion

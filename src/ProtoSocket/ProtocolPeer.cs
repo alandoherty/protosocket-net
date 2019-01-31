@@ -7,6 +7,7 @@ using System.IO.Pipelines;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,7 +18,6 @@ namespace ProtoSocket
     /// Represents a low-level protocol peer.
     /// </summary>
     public abstract class ProtocolPeer<TFrame> : IProtocolPeer, IObservable<TFrame>, IDisposable
-        where TFrame : class
     {
         #region Fields
         private NetworkStream _netStream;
@@ -30,18 +30,24 @@ namespace ProtoSocket
         private object _userdata = null;
         private IProtocolCoder<TFrame> _coder;
         private ProtocolState _state = ProtocolState.Connecting;
+        private ProtocolMode _mode = ProtocolMode.Active;
 
         private IPEndPoint _localEP;
         private IPEndPoint _remoteEP;
 
         private int _disposed;
-        internal CancellationTokenSource _disposeSource = new CancellationTokenSource();
+        internal CancellationTokenSource _disposeCancelSource = new CancellationTokenSource();
         internal CancellationTokenSource _readCancelSource = new CancellationTokenSource();
+        internal CancellationTokenSource _readDisposeCancelSource = null;
 
         private Dictionary<object, CorrelatedWait> _correlations = new Dictionary<object, CorrelatedWait>();
 
         private long _statFramesIn;
         private long _statFramesOut;
+        private long _statBytesIn;
+        private long _statBytesOut;
+        private DateTimeOffset? _statTimeConnected;
+        private DateTimeOffset? _statTimeDisconnected;
 
         private Queue<QueuedFrame> _sendQueue = new Queue<QueuedFrame>();
         private SemaphoreSlim _sendSemaphore = new SemaphoreSlim(1, 1);
@@ -54,6 +60,11 @@ namespace ProtoSocket
         private PipeReader _pipeReader = null;
         private PipeWriter _pipeWriter = null;
         private Pipe _pipe = null;
+
+        private int _bufferSize;
+
+        private bool _isDisposableFrame;
+        private bool _connectedAnnounced;
         #endregion
 
         #region Properties
@@ -66,6 +77,15 @@ namespace ProtoSocket
         /// Gets the coder used by this peer.
         /// </summary>
         public IProtocolCoder<TFrame> Coder {
+            get {
+                return _coder;
+            }
+        }
+
+        /// <summary>
+        /// Gets the coder used by this peer.
+        /// </summary>
+        object IProtocolPeer.Coder {
             get {
                 return _coder;
             }
@@ -88,6 +108,29 @@ namespace ProtoSocket
         public ProtocolState State {
             get {
                 return _state;
+            }
+        }
+        
+        /// <summary>
+        /// Gets the peer mode.
+        /// </summary>
+        public ProtocolMode Mode {
+            get {
+                return _mode;
+            } set {
+                // if same value ignore
+                if (value == _mode)
+                    return;
+
+                // set mode
+                _mode = value;
+
+                // start the loop or stop the loop
+                if (value == ProtocolMode.Active) {
+                    ReadLoop();
+                } else {
+                    _readCancelSource.Cancel();
+                }
             }
         }
 
@@ -238,6 +281,31 @@ namespace ProtoSocket
         }
         #endregion
 
+        #region Misc
+        /// <summary>
+        /// Gets the raw underlying data stream. Reading from the stream when the peer is in <see cref="ProtocolMode.Active"/> will almost certainly create problems, and writing should be synchronized such that no data is flushed concurrently. 
+        /// </summary>
+        /// <returns>The raw data stream.</returns>
+        public Stream GetStream() {
+            return _dataStream;
+        }
+
+        /// <summary>
+        /// Gets the network statistics for the peer.
+        /// </summary>
+        /// <param name="stats">The statistics.</param>
+        public void GetStatistics(out PeerStatistics stats) {
+            stats = default;
+            stats.AliveSpan = _statTimeConnected == null ? TimeSpan.Zero : (_statTimeDisconnected.HasValue ? _statTimeDisconnected.Value : DateTimeOffset.UtcNow) - _statTimeConnected.Value;
+            stats.BytesIn = _statBytesIn;
+            stats.BytesOut = _statBytesOut;
+            stats.FramesIn = _statFramesIn;
+            stats.FramesOut = _statFramesOut;
+            stats.TimeConnected = _statTimeConnected;
+            stats.TimeDisconnected = _statTimeDisconnected;
+        }
+        #endregion
+
         #region Queued Sending
         /// <summary>
         /// Queues the frames to be sent, this will happen on the next call to <see cref="FlushAsync(CancellationToken)"/>. 
@@ -274,7 +342,7 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Queues the frame to be sent, this will happen on the next call to <see cref="FlushAsync(CancellationToken)"/>.
+        /// Queues the frame to be sent, this will happen on the next call to <see cref="FlushAsync(CancellationToken)"/>/<see cref="SendAsync(TFrame, CancellationToken)"/>.
         /// </summary>
         /// <param name="frame">The frame.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
@@ -326,12 +394,12 @@ namespace ProtoSocket
         /// Sends all queued frames.
         /// You MUST obtain the send semaphore before calling this method.
         /// </summary>
-        /// <returns></returns>
+        /// <returns>The number of sent frames.</returns>
         private async Task<int> SendAllAsync() {
             // get queued packets, we create the list with the non-thread safe count in hopes it's accurate after
             // we obtain the lock, worst case is we allocated one too much or too little and we get a small performance penalty
             List<QueuedFrame> queuedFrames = new List<QueuedFrame>(_sendQueue.Count);
-
+            
             lock (_sendQueue) {
                 while (_sendQueue.Count > 0)
                     queuedFrames.Add(_sendQueue.Dequeue());
@@ -343,20 +411,58 @@ namespace ProtoSocket
 
             // write to buffer
             try {
-                foreach (QueuedFrame queuedFrame in queuedFrames) {
-                    // write to underlying stream
-                    await _coder.WriteAsync(_dataStream, queuedFrame.Frame, new CoderContext<TFrame>(this), _disposeSource.Token).ConfigureAwait(false);
+                long bufferOutBytes = 0;
+                MemoryStream bufferStream = new MemoryStream(_bufferSize);
 
-                    // complete task source if available
-                    if (queuedFrame.TaskSource != null)
-                        queuedFrame.TaskSource.TrySetResult(true);
+                foreach (QueuedFrame queuedFrame in queuedFrames) {
+                    // write to buffer
+                    _coder.Write(bufferStream, queuedFrame.Frame, new CoderContext<TFrame>(this));
+
+                    // if we're written at least buffer size bytes lets write it to the underlying stream and seek back
+                    if (bufferStream.Position >= _bufferSize) {
+                        // get the buffer segment from the stream
+                        ArraySegment<byte> bufferArray;
+
+                        if (!bufferStream.TryGetBuffer(out bufferArray))
+                            throw new InvalidOperationException("The buffer could not be retrieved");
+
+                        // write to stream and seek back
+                        await _dataStream.WriteAsync(bufferArray.Array, bufferArray.Offset, bufferArray.Count, _disposeCancelSource.Token).ConfigureAwait(false);
+
+                        bufferOutBytes += bufferArray.Count;
+                        bufferStream.Seek(0, SeekOrigin.Begin);
+                    }
+                }
+                
+                // if we have any data to send, write it to the underlying stream
+                if (bufferStream.Position >= 0) {
+                    // get the buffer segment from the stream
+                    ArraySegment<byte> bufferArray;
+
+                    if (!bufferStream.TryGetBuffer(out bufferArray))
+                        throw new InvalidOperationException("The buffer could not be retrieved");
+
+                    bufferOutBytes += bufferArray.Count;
+                    await _dataStream.WriteAsync(bufferArray.Array, bufferArray.Offset, bufferArray.Count, _disposeCancelSource.Token).ConfigureAwait(false);
                 }
 
                 // flush underlying stream
                 await _dataStream.FlushAsync().ConfigureAwait(false);
 
-                // increment stat
-                _statFramesOut++;
+                // increment stats
+                _statFramesOut += queuedFrames.Count;
+                _statBytesOut += bufferOutBytes;
+
+                // mark all queued frames as sent
+                foreach (QueuedFrame queuedFrame in queuedFrames) {
+                    // trigger task source (used by QueueAsync)
+                    if (queuedFrame.TaskSource != null)
+                        queuedFrame.TaskSource.TrySetResult(true);
+
+                    // if IDisposable call Dispose to indicate the frame was sent
+                    if (queuedFrame.Frame is IDisposable)
+                        ((IDisposable)queuedFrame.Frame).Dispose();
+                }
             } catch(Exception ex) {
                 Abort("Failed to encode frame", ex);
                 throw;
@@ -378,10 +484,12 @@ namespace ProtoSocket
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
-            else if (_client == null)
-                throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Upgrading)
+                throw new InvalidOperationException("The peer is currently upgrading");
             else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
                 throw new InvalidOperationException("The peer is not ready to send frames");
+            else if (_client == null)
+                throw new InvalidOperationException("The peer has not been configured");
 
             // wait for the send semaphore to become available, if cancelled we let the exception
             // bubble up since nothing has happened yet
@@ -399,7 +507,7 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Sends a frame and all other queued frames asyncronously.
+        /// Sends and flushes a frame and all other queued frames asyncronously.
         /// </summary>
         /// <param name="frame">The frame.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
@@ -412,10 +520,12 @@ namespace ProtoSocket
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
-            else if (_client == null)
-                throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Upgrading)
+                throw new InvalidOperationException("The peer is currently upgrading");
             else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
                 throw new InvalidOperationException("The peer is not ready to send frames");
+            else if (_client == null)
+                throw new InvalidOperationException("The peer has not been configured");
 
             // wait for the send semaphore to become available, if cancelled we let the exception
             // bubble up since nothing has happened yet
@@ -449,10 +559,12 @@ namespace ProtoSocket
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
-            else if (_client == null)
-                throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Upgrading)
+                throw new InvalidOperationException("The peer is currently upgrading");
             else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
                 throw new InvalidOperationException("The peer is not ready to send frames");
+            else if (_client == null)
+                throw new InvalidOperationException("The peer has not been configured");
 
             // wait for the send semaphore to become available, if cancelled we let the exception
             // bubble up since nothing has happened yet
@@ -475,22 +587,44 @@ namespace ProtoSocket
 
         #region Receiving
         /// <summary>
+        /// Trys to receive a frame from the peer asyncronously, this operation will not block.
+        /// </summary>
+        /// <param name="frame">The output frame.</param>
+        /// <returns>If a frame was read.</returns>
+        public bool TryReceive(out TFrame frame) {
+            if (_receiveQueue.Count > 0) {
+                lock (_receiveQueue) {
+                    if (_receiveQueue.Count > 0) {
+                        frame = _receiveQueue.Dequeue();
+                        return true;
+                    }
+                }
+            }
+
+            frame = default(TFrame);
+            return false;
+        }
+
+        /// <summary>
         /// Receives a single frame asyncronously.
         /// </summary>
+        /// <param name="receiveBuffer">The receive buffer, not used in <see cref="ProtocolMode.Active"/> mode.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
         /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
         /// <exception cref="InvalidOperationException">If the peer has not been configured yet.</exception>
         /// <exception cref="InvalidOperationException">If multiple concurrent receive calls are detected.</exception>
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <returns></returns>
-        public Task<TFrame> ReceiveAsync(CancellationToken cancellationToken = default(CancellationToken)) {
-            return ReceiveAsync(Timeout.InfiniteTimeSpan, cancellationToken);
+        public Task<TFrame> ReceiveAsync(byte[] receiveBuffer = null, CancellationToken cancellationToken = default(CancellationToken)) {
+            return ReceiveAsync(Timeout.InfiniteTimeSpan, receiveBuffer, cancellationToken);
         }
 
         /// <summary>
         /// Receives a single frame asyncronously.
         /// </summary>
         /// <param name="timeout">The optional timeout.</param>
+        /// <param name="receiveBuffer">The receive buffer, not used in <see cref="ProtocolMode.Active"/> mode.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <exception cref="ObjectDisposedException">If the peer closes during the operation.</exception>
         /// <exception cref="InvalidOperationException">If the peer is disconnecting or disconnected.</exception>
@@ -498,14 +632,16 @@ namespace ProtoSocket
         /// <exception cref="OperationCanceledException">If the operation is cancelled.</exception>
         /// <exception cref="TimeoutException">If the operation has timed out.</exception>
         /// <returns>The received frame.</returns>
-        public virtual async Task<TFrame> ReceiveAsync(TimeSpan timeout, CancellationToken cancellationToken = default(CancellationToken)) {
+        public virtual async Task<TFrame> ReceiveAsync(TimeSpan timeout, byte[] receiveBuffer = null, CancellationToken cancellationToken = default(CancellationToken)) {
             // validate the peer isn't disposed or not ready
             if (_disposed == 1)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
-            else if (_client == null)
-                throw new InvalidOperationException("The peer has not been configured");
+            else if (_state == ProtocolState.Upgrading)
+                throw new InvalidOperationException("The peer is currently upgrading");
             else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
                 throw new InvalidOperationException("The peer is not ready to receive frames");
+            else if (_client == null)
+                throw new InvalidOperationException("The peer has not been configured");
 
             // check if anything is in the queue, try and lock and get it if so
             if (_receiveQueue.Count > 0) {
@@ -516,28 +652,44 @@ namespace ProtoSocket
                 }
             }
 
-            // create source
-            TaskCompletionSource<TFrame> completionSource = new TaskCompletionSource<TFrame>();
+            if (_mode == ProtocolMode.Active) {
+                // create source
+                TaskCompletionSource<TFrame> completionSource = new TaskCompletionSource<TFrame>();
 
-            if (Interlocked.CompareExchange(ref _receiveSource, completionSource, null) != null)
-                throw new InvalidOperationException("A receive call is already in progress");
+                if (Interlocked.CompareExchange(ref _receiveSource, completionSource, null) != null)
+                    throw new InvalidOperationException("A receive call is already in progress");
 
-            try {
-                if (timeout == Timeout.InfiniteTimeSpan) {
-                    // if we have an infinite timeout just await the completion source
-                    return await completionSource.Task.ConfigureAwait(false);
-                } else {
-                    // create timeout delay
-                    Task timeoutDelay = Task.Delay(timeout);
-                    Task completedTask = await Task.WhenAny(timeoutDelay, completionSource.Task).ConfigureAwait(false);
+                try {
+                    if (timeout == Timeout.InfiniteTimeSpan) {
+                        // if we have an infinite timeout just await the completion source
+                        return await completionSource.Task.ConfigureAwait(false);
+                    } else {
+                        // create timeout delay
+                        Task timeoutDelay = Task.Delay(timeout);
+                        Task completedTask = await Task.WhenAny(timeoutDelay, completionSource.Task).ConfigureAwait(false);
 
-                    if (completedTask == timeoutDelay)
-                        throw new TimeoutException("The receive operation has timed out");
-                    else
-                        return ((Task<TFrame>)completedTask).Result;
+                        if (completedTask == timeoutDelay)
+                            throw new TimeoutException("The receive operation has timed out");
+                        else
+                            return ((Task<TFrame>)completedTask).Result;
+                    }
+                } finally {
+                    _receiveSource = null;
                 }
-            } finally {
-                _receiveSource = null;
+            } else {
+                byte[] recvBuffer = receiveBuffer ?? new byte[4096];
+                List<TFrame> recvFrames = new List<TFrame>(1);
+
+                // read from the peer
+                if (await ReadAsync(recvBuffer, recvFrames, 1).ConfigureAwait(false) == 0) {
+                    if (_closeException != null)
+                        throw _closeException;
+                    else
+                        throw new Exception(_closeReason);
+                }
+
+                // return the frame
+                return recvFrames[0];
             }
         }
         #endregion
@@ -579,7 +731,7 @@ namespace ProtoSocket
                     }
                 }
 
-                if (_disposeSource.Token == ex.CancellationToken)
+                if (_disposeCancelSource.Token == ex.CancellationToken)
                     throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer was disposed before the correlation could be fulfilled");
                 else
                     throw;
@@ -618,7 +770,14 @@ namespace ProtoSocket
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns></returns>
         public virtual async Task<TFrame> RequestAsync(TFrame frame, TimeSpan timeout, CancellationToken cancellationToken = default(CancellationToken)) {
-            if (_client == null)
+            // validate the peer isn't disposed or not ready
+            if (_disposed == 1)
+                throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>), "The peer has been disposed");
+            else if (_state == ProtocolState.Upgrading)
+                throw new InvalidOperationException("The peer is currently upgrading");
+            else if (_state == ProtocolState.Disconnected || _state == ProtocolState.Disconnecting)
+                throw new InvalidOperationException("The peer is not ready to send frames");
+            else if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
 
             // check we can get a corellation for this frame
@@ -627,9 +786,9 @@ namespace ProtoSocket
 
             // get combined cancellation token
             if (cancellationToken == CancellationToken.None)
-                cancellationToken = _disposeSource.Token;
+                cancellationToken = _disposeCancelSource.Token;
             else
-                cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeSource.Token).Token;
+                cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCancelSource.Token).Token;
 
             // get requestable frame
             ICorrelatableFrame<TFrame> requestableFrame = frame as ICorrelatableFrame<TFrame>;
@@ -661,7 +820,7 @@ namespace ProtoSocket
         /// </summary>
         /// <param name="upgrader">The upgrader.</param>
         /// <returns></returns>
-        public async Task UpgradeAsync(IProtocolUpgrader<TFrame> upgrader) {
+        public async Task UpgradeAsync(IProtocolUpgrader upgrader) {
             if (_client == null)
                 throw new InvalidOperationException("The peer has not been configured");
 
@@ -671,6 +830,20 @@ namespace ProtoSocket
             else if (_state != ProtocolState.Connected)
                 throw new InvalidOperationException("The peer must be connected to upgrade");
 
+            // raw upgrade
+            await UpgradeRawAsync(upgrader).ConfigureAwait(false);
+
+            // restart read loop
+            _state = ProtocolState.Connected;
+            ReadLoop();
+        }
+
+        /// <summary>
+        /// Upgrades the peer with the provided upgrader. Does not check/change the state or restart the read loop.
+        /// </summary>
+        /// <param name="upgrader">The upgrader.</param>
+        /// <returns></returns>
+        private async Task UpgradeRawAsync(IProtocolUpgrader upgrader) {
             // update state
             OnStateChanged(new PeerStateChangedEventArgs<TFrame>() {
                 OldState = _state,
@@ -693,11 +866,9 @@ namespace ProtoSocket
                 NewState = ProtocolState.Connected
             });
 
-            _state = ProtocolState.Connected;
-
             // create new read cancel source and restart loop
             _readCancelSource = new CancellationTokenSource();
-            ReadLoop();
+            _readDisposeCancelSource = CancellationTokenSource.CreateLinkedTokenSource(_readCancelSource.Token, _disposeCancelSource.Token);
         }
 
         /// <summary>
@@ -740,7 +911,83 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Reads the next frame.
+        /// Reads up to the maximum number of frames.
+        /// </summary>
+        /// <param name="readBuffer">The read buffer.</param>
+        /// <param name="outputBuffer">The output buffer.</param>
+        /// <param name="maximumRead">The maximum number of frames to read.</param>
+        /// <returns>The number of frames read.</returns>
+        private async Task<int> ReadAsync(byte[] readBuffer, IList<TFrame> outputBuffer, int maximumRead = -1) {
+            int readBufferCount = 0;
+            int frameRead = 0;
+
+            while (_coder.Read(_pipeReader, new CoderContext<TFrame>(this), out TFrame frame) && (maximumRead == -1 || maximumRead > frameRead)) {
+                outputBuffer.Add(frame);
+                frameRead++;
+            }
+
+            if (frameRead > 0)
+                return frameRead;
+
+            // check cancellation status
+            if (_readDisposeCancelSource.IsCancellationRequested) {
+                if (_disposeCancelSource.IsCancellationRequested)
+                    Abort("Peer disposed before read from stream");
+
+                return 0;
+            }
+
+            // read stream into pipe
+            try {
+                readBufferCount = await _dataStream.ReadAsync(readBuffer, 0, readBuffer.Length, _readDisposeCancelSource.Token).ConfigureAwait(false);
+            } catch (OperationCanceledException ex) {
+                if (ex.CancellationToken == _disposeCancelSource.Token)
+                    Abort("Peer disposed before read from stream", ex);
+
+                return 0;
+            } catch (ObjectDisposedException ex) {
+                Abort("End of stream", ex);
+                return 0;
+            } catch (Exception ex) {
+                Abort($"Read exception: {ex.Message}");
+                return 0;
+            }
+
+            // check if end of stream has been reached
+            if (readBufferCount == 0) {
+                Abort("End of stream");
+                return 0;
+            }
+
+            // write to pipe
+            try {
+                await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(readBuffer, 0, readBufferCount), _readCancelSource.Token).ConfigureAwait(false);
+            } catch(OperationCanceledException) {
+                return 0;
+            }
+
+            // increment stats
+            _statBytesIn += readBufferCount;
+            
+            // try and process the incoming data into frames
+            try {
+                while (_coder.Read(_pipeReader, new CoderContext<TFrame>(this), out TFrame frame) && (maximumRead == -1 || maximumRead > frameRead)) {
+                    outputBuffer.Add(frame);
+                    frameRead++;
+                    _statFramesIn++;
+                }
+            } catch (Exception ex) {
+                _closeReason = (ex is ProtocolCoderException) ? "Failed to decode incoming frame" : "Exception occured while decoding frame";
+                _closeException = ex;
+                Abort(_closeReason, _closeException);
+                return 0;
+            }
+
+            return frameRead;
+        }
+
+        /// <summary>
+        /// Reads the next frames.
         /// </summary>
         private async void ReadLoop() {
             PeerReceivedEventArgs<TFrame> eventArgs = new PeerReceivedEventArgs<TFrame>() {
@@ -748,58 +995,19 @@ namespace ProtoSocket
             };
 
             // the internal read buffer
-            byte[] readBuffer = new byte[1024];
-            int readBufferCount = 0;
+            byte[] readBuffer = new byte[_bufferSize];
 
             // the internal frame buffer
             List<TFrame> frameBuffer = new List<TFrame>(16);
 
             while (_disposed == 0) {
                 try {
-                    // read stream into pipe
-                    try {
-                        readBufferCount = await _dataStream.ReadAsync(readBuffer, 0, readBuffer.Length, _disposeSource.Token).ConfigureAwait(false);
-                    } catch (OperationCanceledException ex) {
-                        if (ex.CancellationToken == _disposeSource.Token) {
-                            Abort("Peer disposed before incoming frame decoded", ex);
-                        } else if (ex.CancellationToken == _readCancelSource.Token) {
-                        }
-
-                        return;
-                    } catch (ObjectDisposedException ex) {
-                        Abort("End of stream", ex);
-                        return;
-                    } catch (Exception ex) {
-                        Abort($"Read exception: {ex.Message}");
-                        return;
-                    }
-
-                    // check if end of stream has been reached
-                    if (readBufferCount == 0) {
-                        Abort("End of stream");
-                        return;
-                    }
-
-                    // write to pipe
-                    await _pipeWriter.WriteAsync(new ReadOnlyMemory<byte>(readBuffer, 0, readBufferCount)).ConfigureAwait(false);
-
-                    // try and process the incoming data into frames
-                    try {
-                        while (_coder.Read(_pipeReader, new CoderContext<TFrame>(this), out TFrame frame))
-                            frameBuffer.Add(frame);
-                    } catch(Exception ex) {
-                        _closeReason = (ex is ProtocolCoderException) ? "Failed to decode incoming frame" : "Exception occured while decoding frame";
-                        _closeException = ex;
-                        Abort(_closeReason, _closeException);
-                        return;
-                    }
+                    // read the next frames
+                    await ReadAsync(readBuffer, frameBuffer, -1).ConfigureAwait(false);
 
                     // if we found at least one frame lets process them
                     if (frameBuffer.Count > 0) {
                         foreach(TFrame frame in frameBuffer) {
-                            // increment stat
-                            _statFramesIn++;
-
                             // correlate frame if supported
                             if (frame is ICorrelatableFrame<TFrame>) {
                                 ICorrelatableFrame<TFrame> requestableFrame = frame as ICorrelatableFrame<TFrame>;
@@ -875,7 +1083,7 @@ namespace ProtoSocket
         /// Configures this peer with the provided transport.
         /// </summary>
         /// <param name="client">The client.</param>
-        internal void Configure(TcpClient client) {
+        protected internal void Configure(TcpClient client) {
             // check if disposed
             if (_disposed > 0)
                 throw new ObjectDisposedException(nameof(ProtocolPeer<TFrame>));
@@ -901,37 +1109,20 @@ namespace ProtoSocket
             _dataStream = _netStream;
 
             // set pipe
-            _pipe = new Pipe();
+            _pipe = new Pipe(new PipeOptions(null, null, null, Math.Max(32768, _bufferSize * 2)));
             _pipeReader = _pipe.Reader;
             _pipeWriter = _pipe.Writer;
 
             // call event
             OnConnected(new PeerConnectedEventArgs<TFrame>() { Peer = this });
+            _connectedAnnounced = true;
+
+            // set time
+            _statTimeConnected = DateTimeOffset.UtcNow;
 
             // begin async read loop
-            ReadLoop();
-        }
-
-        /// <summary>
-        /// Transfers the underlying transport to another peer and disposes this object.
-        /// The target peer must be unconfigured.
-        /// </summary>
-        /// <typeparam name="NTFrame">The new frame type.</typeparam>
-        /// <param name="peer">The peer.</param>
-        public void Transfer<NTFrame>(ProtocolPeer<NTFrame> peer)
-            where NTFrame : class {
-            if (_client == null)
-                throw new InvalidOperationException("The peer has not been configured");
-
-            // get client and nullify current reference
-            TcpClient client = _client;
-
-            // dispose
-            _client = null;
-            Dispose();
-
-            // configure new peer
-            peer.Configure(_client);
+            if (_mode == ProtocolMode.Active)
+                ReadLoop();
         }
 
         /// <summary>
@@ -964,12 +1155,16 @@ namespace ProtoSocket
                     // check if it has a completion source and mark it with the exception
                     if (queuedFrame.TaskSource != null)
                         queuedFrame.TaskSource.TrySetException(objectDisposedException);
+
+                    // dispose
+                    if (queuedFrame.Frame is IDisposable)
+                        ((IDisposable)queuedFrame.Frame).Dispose();
                 }
             }
 
             // cancel
             try {
-                _disposeSource.Cancel();
+                _disposeCancelSource.Cancel();
             } catch (Exception) { }
 
             // dispose client, if available
@@ -978,7 +1173,7 @@ namespace ProtoSocket
                     _client.Dispose();
             } catch (Exception) { }
 
-            // remove all subscriptions mark as completeds
+            // remove all subscriptions mark as completed
             lock (_subscriptions) {
                 foreach (Subscription sub in _subscriptions) {
                     sub.Observer.OnCompleted();
@@ -987,12 +1182,20 @@ namespace ProtoSocket
                 _subscriptions.Clear();
             }
 
-            // mark pipe reader as completed
-            _pipeReader.Complete(_closeException);
+            // mark pipe as completed
+            if (_pipe != null) {
+                _pipeReader.Complete(_closeException);
+                _pipeWriter.Complete(_closeException);
+            }
 
             // disconnected event
-            if (_client != null)
+            if (_connectedAnnounced)
                 OnDisconnected(new PeerDisconnectedEventArgs<TFrame>() { Peer = this });
+            else
+                _state = ProtocolState.Disconnected;
+
+            // statistics time
+            _statTimeDisconnected = DateTimeOffset.UtcNow;
         }
 
         /// <summary>
@@ -1135,11 +1338,24 @@ namespace ProtoSocket
         #endregion
 
         #region Constructors
+        private ProtocolPeer(ProtocolMode mode, int bufferSize) {
+            if (bufferSize < 1)
+                throw new ArgumentOutOfRangeException(nameof(bufferSize), "The buffer size cannot be zero");
+
+            _bufferSize = bufferSize;
+            _mode = mode;
+            _isDisposableFrame = typeof(IDisposable).GetTypeInfo().IsAssignableFrom(typeof(TFrame).GetTypeInfo());
+        }
+
         /// <summary>
         /// Creates an uninitialized protocol peer.
         /// </summary>
         /// <param name="coder">The protocol coder.</param>
-        protected ProtocolPeer(IProtocolCoder<TFrame> coder) {
+        /// <param name="mode">The protocol mode.</param>
+        /// <param name="bufferSize">The read buffer size.</param>
+        protected ProtocolPeer(IProtocolCoder<TFrame> coder, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) 
+            : this(mode, bufferSize) {
+            _readDisposeCancelSource = CancellationTokenSource.CreateLinkedTokenSource(_readCancelSource.Token, _disposeCancelSource.Token);
             _coder = coder;
         }
 
@@ -1147,7 +1363,11 @@ namespace ProtoSocket
         /// Creates an uninitialized protocol peer.
         /// </summary>
         /// <param name="coderFactory">The protocol coder factory.</param>
-        protected ProtocolPeer(ProtocolCoderFactory<TFrame> coderFactory) {
+        /// <param name="mode">The protocol mode.</param>
+        /// <param name="bufferSize">The read buffer size.</param>
+        protected ProtocolPeer(ProtocolCoderFactory<TFrame> coderFactory, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) 
+            : this(mode, bufferSize) {
+            _readDisposeCancelSource = CancellationTokenSource.CreateLinkedTokenSource(_readCancelSource.Token, _disposeCancelSource.Token);
             _coder = coderFactory(this);
         }
         #endregion
@@ -1158,7 +1378,6 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TFrame">The frame type.</typeparam>
     public class PeerConnectedEventArgs<TFrame>
-        where TFrame : class
     {
         /// <summary>
         /// Gets the peer object.
@@ -1171,7 +1390,6 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TFrame">The frame type.</typeparam>
     public class PeerDisconnectedEventArgs<TFrame>
-        where TFrame : class
     {
         /// <summary>
         /// Gets the peer object.
@@ -1184,7 +1402,6 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TFrame">The frame type.</typeparam>
     public class PeerReceivedEventArgs<TFrame>
-        where TFrame : class
     {
         /// <summary>
         /// Gets the peer object.
@@ -1207,7 +1424,6 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TFrame">The frame type.</typeparam>
     public class PeerStateChangedEventArgs<TFrame>
-        where TFrame : class
     {
         /// <summary>
         /// Gets the peer object.

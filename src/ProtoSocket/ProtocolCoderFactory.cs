@@ -10,6 +10,5 @@ namespace ProtoSocket
     /// <typeparam name="TFrame">The frame type.</typeparam>
     /// <param name="peer">The peer.</param>
     /// <returns>The coder.</returns>
-    public delegate IProtocolCoder<TFrame> ProtocolCoderFactory<TFrame>(ProtocolPeer<TFrame> peer)
-        where TFrame : class;
+    public delegate IProtocolCoder<TFrame> ProtocolCoderFactory<TFrame>(ProtocolPeer<TFrame> peer);
 }

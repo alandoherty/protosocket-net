@@ -12,7 +12,6 @@ namespace ProtoSocket
     /// </summary>
     /// <typeparam name="TFrame">The frame type.</typeparam>
     public class ProtocolClient<TFrame> : ProtocolPeer<TFrame>, IProtocolClient
-        where TFrame : class
     {
         #region Properties
         /// <summary>
@@ -42,6 +41,10 @@ namespace ProtoSocket
         /// <param name="uri">The endpoint.</param>
         /// <returns></returns>
         public virtual async Task ConnectAsync(Uri uri) {
+            // check if already connected
+            if (IsConnected)
+                throw new InvalidOperationException("The peer is already connected");
+
             // check scheme
             if (!uri.Scheme.Equals("tcp", StringComparison.CurrentCultureIgnoreCase))
                 throw new UriFormatException("The protocol scheme must be TCP");
@@ -66,7 +69,9 @@ namespace ProtoSocket
         /// Creates a new protocol client.
         /// </summary>
         /// <param name="coder">The coder.</param>
-        public ProtocolClient(IProtocolCoder<TFrame> coder) : base(coder) {
+        /// <param name="mode">The initial mode.</param>
+        /// <param name="bufferSize">The buffer size.</param>
+        public ProtocolClient(IProtocolCoder<TFrame> coder, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) : base(coder, mode, bufferSize) {
         }
         #endregion
     }

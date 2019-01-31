@@ -8,7 +8,6 @@ namespace ProtoSocket
     /// Represents an interface for matching request and response frames.
     /// </summary>
     public interface ICorrelatableFrame<TFrame>
-        where TFrame : class
     {
         /// <summary>
         /// Gets the corellation id for this frame.

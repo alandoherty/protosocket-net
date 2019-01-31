@@ -57,23 +57,10 @@ namespace Example.Minecraft.Net
         /// <param name="stream">The stream.</param>
         /// <param name="frame">The frame.</param>
         /// <param name="ctx">The coder context.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns></returns>
-        public async Task WriteAsync(Stream stream, ClassicPacket frame, CoderContext<ClassicPacket> ctx, CancellationToken cancellationToken) {
-            // rent a combined buffer
-            int combinedLength = frame.Payload.Length + 1;
-            byte[] combinedBuffer = ArrayPool<byte>.Shared.Rent(combinedLength);
-
-            try {
-                // copy data into the buffer
-                combinedBuffer[0] = (byte)frame.Id;
-                Buffer.BlockCopy(frame.Payload, 0, combinedBuffer, 1, frame.Payload.Length);
-
-                // write asyncronously
-                await stream.WriteAsync(combinedBuffer, 0, combinedLength, cancellationToken).ConfigureAwait(false);
-            } finally {
-                ArrayPool<byte>.Shared.Return(combinedBuffer);
-            }
+        public void Write(Stream stream, ClassicPacket frame, CoderContext<ClassicPacket> ctx) {
+            stream.WriteByte((byte)frame.Id);
+            stream.Write(frame.Payload, 0, frame.Payload.Length);
         }
 
         public bool Read(PipeReader reader, CoderContext<ClassicPacket> ctx, out ClassicPacket frame) {
@@ -116,7 +103,7 @@ namespace Example.Minecraft.Net
             }
 
             // we didn't find a frame
-            frame = null;
+            frame = default;
             return false;
         }
     }

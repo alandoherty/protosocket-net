@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -30,9 +31,6 @@ namespace Example.Minecraft.Net.Packets
         }
 
         public void WriteString(string str) {
-            if (str.Length > 64)
-                throw new ArgumentException("The string cannot be longer than 64 characters");
-
             // get string
             byte[] rawBytes = new byte[64];
 
@@ -42,7 +40,7 @@ namespace Example.Minecraft.Net.Packets
 
             byte[] strBytes = Encoding.ASCII.GetBytes(str);
 
-            Buffer.BlockCopy(strBytes, 0, rawBytes, 0, strBytes.Length);
+            Buffer.BlockCopy(strBytes, 0, rawBytes, 0, Math.Min(63, strBytes.Length));
             _stream.Write(rawBytes, 0, 64);
         }
 

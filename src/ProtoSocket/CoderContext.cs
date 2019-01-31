@@ -8,7 +8,6 @@ namespace ProtoSocket
     /// Represents a context for encoding/decoding.
     /// </summary>
     public struct CoderContext<TFrame>
-        where TFrame : class
     {
         #region Fields
         private ProtocolPeer<TFrame> _peer;

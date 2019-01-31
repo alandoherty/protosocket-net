@@ -12,8 +12,7 @@ namespace ProtoSocket.Upgraders
     /// <summary>
     /// Provides an upgrader to upgrade connections to SSL.
     /// </summary>
-    public class SslUpgrader<TFrame> : IProtocolUpgrader<TFrame>
-        where TFrame : class
+    public class SslUpgrader : IProtocolUpgrader
     {
         #region Fields
         private X509Certificate2 _cert;
@@ -71,7 +70,7 @@ namespace ProtoSocket.Upgraders
         /// <param name="stream">The stream.</param>
         /// <param name="peer">The peer.</param>
         /// <returns>The new stream.</returns>
-        public async Task<Stream> UpgradeAsync(Stream stream, ProtocolPeer<TFrame> peer) {
+        public async Task<Stream> UpgradeAsync(Stream stream, IProtocolPeer peer) {
             // we need a certificate if we're serverside
             if (_cert == null && peer.Side == ProtocolSide.Server)
                 throw new InvalidOperationException("The server connection cannot upgrade to SSL without a certificate");

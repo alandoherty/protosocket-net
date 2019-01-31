@@ -15,16 +15,58 @@ namespace Example.Line
     /// </summary>
     public class LineCoder : IProtocolCoder<string>
     {
-        public bool Read(PipeReader reader, CoderContext<string> ctx, out string frame) {
-            if (reader.TryRead(out ReadResult result) && !result.IsCompleted) {
-                // create array (not the most efficient way we could do this)
-                byte[] arr = result.Buffer.ToArray();
+        private byte[] _newlineBytes;
+        private Encoding _encoding = Encoding.UTF8;
 
-                // set frame
-                frame = Encoding.UTF8.GetString(arr);
+        /// <summary>
+        /// Gets or sets the encoding.
+        /// </summary>
+        public Encoding Encoding {
+            get {
+                return _encoding;
+            } set {
+                string newlineStr = _encoding.GetString(_newlineBytes);
+                _encoding = value;
+                _newlineBytes = _encoding.GetBytes(newlineStr);
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the newline string.
+        /// </summary>
+        public string NewLine {
+            get {
+                return _encoding.GetString(_newlineBytes);
+            }
+            set {
+                _newlineBytes = _encoding.GetBytes(value);
+            }
+        }
+
+        bool IProtocolCoder<string>.Read(PipeReader reader, CoderContext<string> ctx, out string frame) {
+            if (reader.TryRead(out ReadResult result) && !result.IsCompleted) {
+                int matchedBytes = 0;
+                int scannedBytes = 0;
+
+                foreach(ReadOnlyMemory<byte> rom in result.Buffer) {
+                    for (int i = 0; i < rom.Length; i++) {
+                        if (rom.Span[i] == _newlineBytes[matchedBytes]) {
+                            matchedBytes++;
+
+                            if (matchedBytes == _newlineBytes.Length) {
+                                result.Buffer.Slice(result.Buffer.GetPosition(0), result.Buffer.GetPosition(scannedBytes - matchedBytes));
+                            }
+                        } else {
+                            matchedBytes = 0;
+                        }
+
+                        scannedBytes++;
+                    }
+                }
 
                 // advance
                 reader.AdvanceTo(result.Buffer.End, result.Buffer.End);
+                frame = null;
                 return true;
             }
 
@@ -33,12 +75,37 @@ namespace Example.Line
             return false;
         }
 
-        public void Reset() {
+        void IProtocolCoder<string>.Reset() {
         }
 
-        public Task WriteAsync(Stream stream, string frame, CoderContext<string> ctx, CancellationToken cancellationToken) {
-            byte[] arr = Encoding.UTF8.GetBytes(frame);
-            return stream.WriteAsync(arr, 0, arr.Length);
+        void IProtocolCoder<string>.Write(Stream stream, string frame, CoderContext<string> ctx) {
+            int byteCount = _encoding.GetByteCount(frame) + _newlineBytes.Length;
+        }
+
+        /// <summary>
+        /// Creates a new line coder.
+        /// </summary>
+        public LineCoder() {
+            NewLine = Environment.NewLine;
+        }
+
+        /// <summary>
+        /// Creates a new line coder with the specified encoding.
+        /// </summary>
+        /// <param name="encoding">The encoding.</param>
+        public LineCoder(Encoding encoding) {
+            NewLine = Environment.NewLine;
+            Encoding = encoding;
+        }
+
+        /// <summary>
+        /// Creates a new line coder with the specified encoding and newline.
+        /// </summary>
+        /// <param name="encoding">The encoding.</param>
+        /// <param name="newLine">The new line.</param>
+        public LineCoder(Encoding encoding, string newLine) {
+            NewLine = newLine;
+            Encoding = encoding;
         }
     }
 }

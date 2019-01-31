@@ -11,7 +11,6 @@ namespace ProtoSocket
     /// <typeparam name="TFrame">The frame type.</typeparam>
     public abstract class ProtocolConnection<TConnection, TFrame> : ProtocolPeer<TFrame>, IProtocolConnection
         where TConnection : ProtocolConnection<TConnection, TFrame>
-        where TFrame : class
     {
         #region Fields
         private ProtocolServer<TConnection, TFrame> _server;
@@ -52,8 +51,10 @@ namespace ProtoSocket
         /// </summary>
         /// <param name="server">The server.</param>
         /// <param name="coderFactory">The coder factory.</param>
-        public ProtocolConnection(ProtocolServer<TConnection, TFrame> server, ProtocolCoderFactory<TFrame> coderFactory)
-            : base(coderFactory) {
+        /// <param name="mode">The mode.</param>
+        /// <param name="bufferSize">The read buffer size.</param>
+        protected ProtocolConnection(ProtocolServer<TConnection, TFrame> server, ProtocolCoderFactory<TFrame> coderFactory, ProtocolMode mode, int bufferSize)
+            : base(coderFactory, mode, bufferSize) {
             _server = server;
         }
         #endregion

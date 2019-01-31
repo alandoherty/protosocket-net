@@ -2,22 +2,24 @@
 using System.Diagnostics;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ProtoSocket;
 using ProtoSocket.Upgraders;
 
 namespace Example.Chat
 {
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             if (args.Length == 0)
                 Console.Error.WriteLine("Example.Chat.exe <server|client> [name]");
             else if (args[0].Equals("server", StringComparison.CurrentCultureIgnoreCase))
-                RunServerAsync(args).Wait();
+                await RunServerAsync(args);
             else if (args[0].Equals("client", StringComparison.CurrentCultureIgnoreCase))
-                RunClientAsync(args).Wait();
+                await RunClientAsync(args);
         }
 
         static Task RunServerAsync(string[] args) {
@@ -27,53 +29,64 @@ namespace Example.Chat
             // setup events
             server.Connected += async (s, e) => {
                 Console.WriteLine("{0} connected", e.Peer.RemoteEndPoint);
-                
-                ChatMessage joinMsg = new ChatMessage() {
+
+                // create join frame
+                ChatFrame joinMsg = new ChatFrame() {
                     Name = "",
-                    Text = e.Peer.RemoteEndPoint + " joined the conversation"
+                    Message = $"{e.Peer.RemoteEndPoint} joined the conversation"
                 };
 
-                foreach(ChatConnection conn in server.Connections) {
-                    if (conn != e.Peer)
-                        try {
-                            await conn.SendAsync(joinMsg);
-                        } catch (Exception) { }
-                }
-
-              
+                // send to all other peers
+                try {
+                    await server.SendAsync(joinMsg, c => c != e.Peer);
+                } catch (Exception) { }
+                
                 e.Peer.Received += async (ss, ee) => {
-                    if (ee.Frame.Text == "/list") {
-                        string[] ips = server.Connections.Select(c => "\t" + c.RemoteEndPoint.ToString()).ToArray();
+                    if (string.IsNullOrEmpty(ee.Frame.Name))
+                        return;
 
-                        await e.Peer.SendAsync(new ChatMessage() {
+                    if (ee.Frame.Message == "#list") {
+                        string[] ips = server.Connections.Select(c => $"\t{c.Name} ({c.RemoteEndPoint})").ToArray();
+
+                        await e.Peer.SendAsync(new ChatFrame() {
                             Name = "",
-                            Text = string.Format("{0} clients\n{1}", ips.Length, string.Join("\n", ips))
+                            Message = string.Format("{0} clients\n{1}", ips.Length, string.Join("\n", ips))
+                        }).ConfigureAwait(false);
+                    } else if (ee.Frame.Message == "#stats") {
+                        e.Peer.GetStatistics(out PeerStatistics stats);
+                        StringBuilder statsBuilder = new StringBuilder();
+                        statsBuilder.AppendLine($"Frames In: {stats.FramesIn}");
+                        statsBuilder.AppendLine($"Frames Out: {stats.FramesOut}");
+                        statsBuilder.AppendLine($"Bytes In: {stats.BytesIn}");
+                        statsBuilder.AppendLine($"Bytes Out: {stats.BytesOut}");
+                        statsBuilder.AppendLine($"Elapsed: {Math.Round(stats.AliveSpan.TotalSeconds, 2)}");
+                        statsBuilder.Append($"Mode: {e.Peer.Mode}");
+
+                        await e.Peer.SendAsync(new ChatFrame() {
+                            Name = "",
+                            Message = statsBuilder.ToString()
                         });
                     } else {
-                        foreach (ChatConnection conn in server.Connections) {
-                            if (conn != e.Peer)
-                                try {
-                                    await conn.SendAsync(ee.Frame);
-                                } catch (Exception) { }
-                        }
+                        // send to all other peers
+                        try {
+                            await server.SendAsync(ee.Frame, c => c != e.Peer);
+                        } catch (Exception) { }
                     }
                 };
             };
 
             server.Disconnected += async (s, e) => {
-                ChatMessage joinMsg = new ChatMessage() {
+                ChatFrame leaveMsg = new ChatFrame() {
                     Name = "",
-                    Text = e.Peer.RemoteEndPoint + " left the conversation"
+                    Message = $"{e.Peer.RemoteEndPoint} left the conversation"
                 };
 
-                foreach (ChatConnection conn in server.Connections) {
-                    if (conn != e.Peer)
-                        try {
-                            await conn.SendAsync(joinMsg);
-                        } catch (Exception) { }
-                }
+                // send to all other peers
+                try {
+                    await server.SendAsync(leaveMsg, c => c != e.Peer);
+                } catch (Exception) { }
 
-                Console.WriteLine("{0} disconnected", e.Peer.RemoteEndPoint);
+                Console.WriteLine($"{e.Peer.RemoteEndPoint} disconnected due to {e.Peer.CloseReason}{(e.Peer.CloseException == null ? "" : $" {e.Peer.CloseException.ToString()}")}");
             };
 
             // start
@@ -93,62 +106,68 @@ namespace Example.Chat
 
             string name = args[1];
 
-            // connect
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
+            // create chat client
+            ChatClient client = new ChatClient();
+            await client.ConnectAsync(new Uri("tcp://localhost:6060")).ConfigureAwait(false);
+
+            client.Received += (o, e) => {
+                Console.WriteLine($"{(string.IsNullOrEmpty(e.Frame.Name) ? "" : $"{e.Frame.Name}: ")}{e.Frame.Message}");
+            };
+
+            // loop
+            Console.WriteLine($"connected to {client.RemoteEndPoint}, type /quit to exit");
+
+            // performance test variables
+            string perfStr = Encoding.ASCII.GetString(new byte[64000]);
+            Stopwatch perfStopwatch = new Stopwatch();
+            long perfSent = -1;
 
             while (true) {
-                Console.WriteLine("Connecting: {0}ms", stopwatch.ElapsedMilliseconds);
-                ChatClient client = new ChatClient();
-                await client.ConnectAsync(new Uri("tcp://localhost:6060")).ConfigureAwait(false);
-                Console.WriteLine("Connected: {0}ms", stopwatch.ElapsedMilliseconds);
-                /*
-                client.Received += (s, e) => {
-                    if (e.Frame.Name != string.Empty)
-                        Console.WriteLine("{0}: {1}", e.Frame.Name, e.Frame.Text);
-                    else
-                        Console.WriteLine("{0}", e.Frame.Text);
-                };
-                */
-                Console.WriteLine("Sending: {0}ms", stopwatch.ElapsedMilliseconds);
-                await client.SendAsync(new ChatMessage() {
-                    Name = name,
-                    Text = "Potato"
-                }).ConfigureAwait(false);
-                Console.WriteLine("Closing: {0}ms", stopwatch.ElapsedMilliseconds);
-                await client.CloseAsync("Potato").ConfigureAwait(false);
-                Console.WriteLine("Closed: {0}ms", stopwatch.ElapsedMilliseconds);
-            }
+                // performance test
+                if (perfSent > -1) {
+                    if (perfStopwatch.Elapsed >= TimeSpan.FromSeconds(1)) {
+                        perfStopwatch.Restart();
+                        client.GetStatistics(out PeerStatistics stats);
 
-            /*
-            // loop
-            Console.WriteLine("connected to {0}, type /quit to exit");
+                        Console.WriteLine($"Sending at {Math.Round(((stats.BytesOut - perfSent) / 1024.0f) / 1024.0f, 2)}/MBs");
+                        perfSent = stats.BytesOut;
+                    }
 
-            while(true) {
+                    client.Queue(new ChatFrame() { Message = perfStr, Name = "Potato" });
+                    client.Queue(new ChatFrame() { Message = perfStr, Name = "Potato" });
+                    client.Queue(new ChatFrame() { Message = perfStr, Name = "Potato" });
+                    
+                    await client.FlushAsync();
+                    continue;
+                }
+
                 // read line
                 string line = await Console.In.ReadLineAsync();
 
                 if (line == "/quit")
                     return;
-                else {
-                    Stopwatch stopwatch = new Stopwatch();
-                    stopwatch.Start();
+                else if (line == "/perf") {
+                    perfSent = 0;
+                    perfStopwatch.Start();
+                }
+                else if (line == "/stats") {
+                    client.GetStatistics(out PeerStatistics stats);
+                    StringBuilder statsBuilder = new StringBuilder();
+                    statsBuilder.AppendLine($"Frames In: {stats.FramesIn}");
+                    statsBuilder.AppendLine($"Frames Out: {stats.FramesOut}");
+                    statsBuilder.AppendLine($"Bytes In: {stats.BytesIn}");
+                    statsBuilder.AppendLine($"Bytes Out: {stats.BytesOut}");
+                    statsBuilder.AppendLine($"Elapsed: {Math.Round(stats.AliveSpan.TotalSeconds, 2)}");
+                    statsBuilder.AppendLine($"Mode: {client.Mode}");
 
-                    Task[] tasks = new Task[128];
-
-                    for (int i = 0; i < tasks.Length; i++) {
-                        tasks[i] = client.SendAsync(new ChatMessage() {
-                            Name = name,
-                            Text = line
-                        });
-                    }
-
-                    await Task.WhenAll(tasks);
-
-                    Console.WriteLine("elapsed {0}ms", stopwatch.ElapsedMilliseconds);
+                    Console.Write(statsBuilder.ToString());
+                } else {
+                    await client.SendAsync(new ChatFrame() {
+                        Name = name,
+                        Message = line
+                    });
                 }
             }
-            */
         }
     }
 }

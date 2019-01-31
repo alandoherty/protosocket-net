@@ -5,9 +5,9 @@ using ProtoSocket;
 
 namespace Example.Chat
 {
-    public class ChatClient : ProtocolClient<ChatMessage>
+    public class ChatClient : ProtocolClient<ChatFrame>
     {
-        public ChatClient() : base(new ChatCoder()) {
+        public ChatClient() : base(new ChatCoder(), ProtocolMode.Active) {
         }
     }
 }

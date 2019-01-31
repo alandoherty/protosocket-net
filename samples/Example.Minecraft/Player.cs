@@ -20,7 +20,7 @@ namespace Example.Minecraft
         private float _x = 128;
         private float _y = 40;
         private float _z = 128;
-        private float _yaw;
+        private float _yaw = 270;
         private sbyte _id;
         private float _pitch;
         #endregion
@@ -201,6 +201,10 @@ namespace Example.Minecraft
 
         public void Teleport(float x, float y, float z) {
             UpdatePosition(x, y, z, _yaw, _pitch, true);
+        }
+
+        public void Message(string msg) {
+            Message(-1, msg);
         }
 
         public void Message(sbyte id, string msg) {

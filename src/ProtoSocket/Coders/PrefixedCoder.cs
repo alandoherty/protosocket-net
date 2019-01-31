@@ -116,33 +116,15 @@ namespace ProtoSocket.Coders
         /// <param name="stream">The stream.</param>
         /// <param name="frame">The frame.</param>
         /// <param name="ctx">The coder context.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns></returns>
-        public async Task WriteAsync(Stream stream, TFrame frame, CoderContext<TFrame> ctx, CancellationToken cancellationToken) {
+        public void Write(Stream stream, TFrame frame, CoderContext<TFrame> ctx) {
             // get payload
             byte[] payload = FromFrame(frame);
             byte[] prefixBytes = BitConverter.GetBytes((long)payload.Length);
-
-            if (payload.Length > 8192) {
-                // write asyncronously
-                await stream.WriteAsync(prefixBytes, 0, _prefixByteCount, cancellationToken).ConfigureAwait(false);
-                await stream.WriteAsync(payload, 0, payload.Length).ConfigureAwait(false);
-            } else {
-                // rent a combined buffer, since we could save effort by using one write call
-                int combinedLength = payload.Length + _prefixByteCount;
-                byte[] combinedBuffer = ArrayPool<byte>.Shared.Rent(combinedLength);
-
-                try {
-                    // copy data into the buffer
-                    Buffer.BlockCopy(prefixBytes, 0, combinedBuffer, 0, _prefixByteCount);
-                    Buffer.BlockCopy(payload, 0, combinedBuffer, _prefixByteCount, payload.Length);
-
-                    // write asyncronously
-                    await stream.WriteAsync(combinedBuffer, 0, combinedLength, cancellationToken).ConfigureAwait(false);
-                } finally {
-                    ArrayPool<byte>.Shared.Return(combinedBuffer);
-                }
-            }
+            
+            // write to the stream
+            stream.Write(prefixBytes, 0, _prefixByteCount);
+            stream.Write(payload, 0, payload.Length);
         }
         #endregion
 

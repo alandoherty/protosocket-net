@@ -18,7 +18,6 @@ namespace ProtoSocket
     /// <typeparam name="TFrame">The frame type.</typeparam>
     public class ProtocolServer<TConnection, TFrame> : IDisposable, IProtocolServer 
         where TConnection : ProtocolConnection<TConnection, TFrame>
-        where TFrame : class
     {
         #region Fields
         private int _disposed;
@@ -28,8 +27,10 @@ namespace ProtoSocket
         private List<TConnection> _connectionsAnnounced = new List<TConnection>();
         private ProtocolCoderFactory<TFrame> _coderFactory;
         private Uri _endpoint;
+        private ProtocolMode _peerMode;
+        private int _peerBufferSize;
 
-        private CancellationTokenSource _stopSource;
+        private CancellationTokenSource _disposeSource;
         #endregion
 
         #region Properties
@@ -45,14 +46,14 @@ namespace ProtoSocket
         }
 
         /// <summary>
-        /// Gets the configured endpoint, if any.
+        /// Gets the configured endpoints, if any.
         /// </summary>
-        public Uri Endpoint {
+        public IEnumerable<Uri> Endpoints {
             get {
                 if (_endpoint == null)
                     throw new InvalidOperationException("The server has not been configured");
 
-                return _endpoint;
+                return new Uri[] { _endpoint };
             }
         }
 
@@ -157,10 +158,11 @@ namespace ProtoSocket
 
                 try {
                     if (_filter.IsAsynchronous)
-                        allow = await _filter.FilterAsync(incomingCtx, _stopSource.Token).ConfigureAwait(false);
+                        allow = await _filter.FilterAsync(incomingCtx, _disposeSource.Token).ConfigureAwait(false);
                     else
                         allow = _filter.Filter(incomingCtx);
                 } catch (OperationCanceledException) {
+                    client.Dispose();
                     return;
                 }
 
@@ -172,7 +174,7 @@ namespace ProtoSocket
             }
 
             // create connection
-            TConnection connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coderFactory);
+            TConnection connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coderFactory, _peerMode, _peerBufferSize);
 
             // add events
             connection.Connected += delegate (object o, PeerConnectedEventArgs<TFrame> e) {
@@ -220,7 +222,7 @@ namespace ProtoSocket
                 _connections.Add(connection);
             }
 
-            // configure
+            // configure and optionally upgrade
             connection.Configure(client);
         }
 
@@ -229,6 +231,12 @@ namespace ProtoSocket
         /// </summary>
         private async void AcceptLoop() {
             while (true) {
+                // check if cancellation is requested
+                if (_disposeSource.IsCancellationRequested) {
+                    _disposeSource = null;
+                    return;
+                }
+
                 // accept next client
                 TcpClient client;
 
@@ -241,7 +249,7 @@ namespace ProtoSocket
                 } catch (ObjectDisposedException) {
                     return;
                 }
-                
+
                 // accept client
                 AcceptNext(client);
             }
@@ -254,22 +262,15 @@ namespace ProtoSocket
             // check if disposed
             if (_disposed > 0)
                 throw new ObjectDisposedException("The protocol server has been disposed");
-            else if (_stopSource != null)
+            else if (_disposeSource != null)
                 throw new InvalidOperationException("The server has already been started");
 
-            // create stop source
-            _stopSource = new CancellationTokenSource();
-
+            // create dispose source
+            _disposeSource = new CancellationTokenSource();
+            
             // start listener and accept next
             _listener.Start();
             AcceptLoop();
-        }
-
-        /// <summary>
-        /// Stops listening for new connections.
-        /// </summary>
-        public virtual void Stop() { 
-            Dispose();
         }
 
         /// <summary>
@@ -284,7 +285,62 @@ namespace ProtoSocket
             _listener.Stop();
 
             // cancel any async operations
-            _stopSource.Cancel();
+            _disposeSource.Cancel();
+        }
+
+        /// <summary>
+        /// Sends and flushes the frame to all connections or those which match a predicate.
+        /// </summary>
+        /// <param name="frame">The connections.</param>
+        /// <param name="predicate">The predicate to match connections.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns></returns>
+        public Task SendAsync(TFrame frame, Predicate<TConnection> predicate = null, CancellationToken cancellationToken = default(CancellationToken)) {
+            // create task list
+            List<Task> tasks = predicate == null ? new List<Task>() : new List<Task>(_connections.Count);
+
+            lock (_connections) {
+                foreach (TConnection conn in _connections) {
+                    if (conn.IsConnected && (predicate == null || predicate(conn)))
+                        tasks.Add(conn.SendAsync(frame));
+                }
+            }
+
+            return Task.WhenAll(tasks);
+        }
+
+        /// <summary>
+        /// Flushes all connections or those which match a predicate.
+        /// </summary>
+        /// <param name="predicate">The predicate to match connections.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns></returns>
+        public Task FlushAsync(Predicate<TConnection> predicate = null, CancellationToken cancellationToken = default(CancellationToken)) {
+            // create task list
+            List<Task> tasks = predicate == null ? new List<Task>() : new List<Task>(_connections.Count);
+
+            lock (_connections) {
+                foreach (TConnection conn in _connections) {
+                    if (conn.IsConnected && (predicate == null || predicate(conn)))
+                        tasks.Add(conn.FlushAsync(cancellationToken));
+                }
+            }
+
+            return Task.WhenAll(tasks);
+        }
+
+        /// <summary>
+        /// Queues the frame on all connections or those which match a predicate.
+        /// </summary>
+        /// <param name="frame">The frame.</param>
+        /// <param name="predicate">The predicate to match connections.</param>
+        public void Queue(TFrame frame, Predicate<TConnection> predicate = null) {
+            lock (_connections) {
+                foreach (TConnection conn in _connections) {
+                    if (conn.IsConnected && (predicate == null || predicate(conn)))
+                        conn.Queue(frame);
+                }
+            }
         }
         #endregion
 
@@ -296,12 +352,16 @@ namespace ProtoSocket
         /// Creates a new protocol server.
         /// </summary>
         /// <param name="coderFactory">The protocol coder factory.</param>
-        public ProtocolServer(ProtocolCoderFactory<TFrame> coderFactory) {
+        /// <param name="mode">The default protocol mode.</param>
+        /// <param name="bufferSize">The default buffer size.</param>
+        public ProtocolServer(ProtocolCoderFactory<TFrame> coderFactory, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) {
             // check coder isn't null
             if (coderFactory == null)
                 throw new ArgumentNullException(nameof(coderFactory), "The coder factory cannot be null");
 
             _coderFactory = coderFactory;
+            _peerBufferSize = bufferSize;
+            _peerMode = mode;
         }
         #endregion
     }

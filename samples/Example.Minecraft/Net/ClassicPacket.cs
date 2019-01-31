@@ -8,7 +8,7 @@ namespace Example.Minecraft.Net
     /// <summary>
     /// Represents a classic packet.
     /// </summary>
-    public class ClassicPacket
+    public struct ClassicPacket
     {
         public PacketId Id { get; set; }
         public byte[] Payload { get; set; }
