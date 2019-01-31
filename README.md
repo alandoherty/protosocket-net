@@ -73,11 +73,7 @@ Task message3 = peer.QueueAsync(new ChatMessage() { Text = "I like eBooks too" }
 
 // you can either call peer.FlushAsync elsewhere or wait until the next call to peer.SendAsync(TFrame/TFrame[]/etc)
 await Task.WhenAll(message1, message2, message3);
-``` 
-
-### Modes
-
-In the newer versions of ProtoSocket you can now create peers in either `Active` or `Passive` mode. In Active mode the peers act 
+```
 
 ### Upgrading/SSL
 
@@ -85,7 +81,7 @@ In many scenarios you will want to perform an upgrade of the underlying transpor
 
 To upgrade the connection to SSL for example, use the pre-built `SslUpgrader` class. Note that flushing or sending frames on the peer will trigger an `InvalidOperationException`. You can queue frames however.
 
-```
+```csharp
 SslUpgrader upgrader = new SslUpgrader("www.google.com");
 upgrader.Protocols = SslProtocols.Tls | SslProtocols.Tls11;
 await peer.UpgradeAsync(upgrader);
@@ -95,7 +91,7 @@ await peer.SendAsync(new ChatMessage() { Text = "Encrypted chat message!" });
 
 You can also upgrade explicitly after connecting, preventing the underlying read loop from accidently interpreting upgraded traffic.
 
-```
+```csharp
 ProtocolClient client = new ProtocolClient(new MyCoder(), ProtocolMode.Passive);
 SslUpgrader upgrader = new SslUpgrader("www.google.com");
 upgrader.Protocols = SslProtocols.Tls | SslProtocols.Tls11;
