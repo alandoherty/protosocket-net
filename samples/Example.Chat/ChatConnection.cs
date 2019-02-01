@@ -16,7 +16,7 @@ namespace Example.Chat
             return base.OnReceived(e);
         }
 
-        public ChatConnection(ProtocolServer<ChatConnection, ChatFrame> server, ProtocolCoderFactory<ChatFrame> coderFactory, ProtocolMode mode, int bufferSize) : base(server, coderFactory, mode, bufferSize) {
+        public ChatConnection(ProtocolServer<ChatConnection, ChatFrame> server, ProtocolCoderFactory<ChatFrame> coderFactory, PeerConfiguration configuration) : base(server, coderFactory, configuration) {
         }
     }
 }

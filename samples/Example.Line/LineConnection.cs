@@ -7,7 +7,7 @@ namespace Example.Line
 {
     class LineConnection : ProtocolConnection<LineConnection, string>
     {
-        public LineConnection(ProtocolServer<LineConnection, string> server, ProtocolCoderFactory<string> coderFactory, ProtocolMode mode, int bufferSize) : base(server, coderFactory, mode, bufferSize) {
+        public LineConnection(ProtocolServer<LineConnection, string> server, ProtocolCoderFactory<string> coderFactory, PeerConfiguration configuration = null) : base(server, coderFactory, configuration) {
         }
     }
 }

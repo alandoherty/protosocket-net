@@ -1338,12 +1338,17 @@ namespace ProtoSocket
         #endregion
 
         #region Constructors
-        private ProtocolPeer(ProtocolMode mode, int bufferSize) {
-            if (bufferSize < 1)
-                throw new ArgumentOutOfRangeException(nameof(bufferSize), "The buffer size cannot be zero");
+        private ProtocolPeer(PeerConfiguration configuration) {
+            // use default if none provided
+            if (configuration == null)
+                configuration = PeerConfiguration.Active;
 
-            _bufferSize = bufferSize;
-            _mode = mode;
+            // validate the buffer size.
+            if (configuration.BufferSize < 1)
+                throw new ArgumentOutOfRangeException(nameof(configuration.BufferSize), "The buffer size cannot be zero");
+            
+            _bufferSize = configuration.BufferSize;
+            _mode = configuration.Mode;
             _isDisposableFrame = typeof(IDisposable).GetTypeInfo().IsAssignableFrom(typeof(TFrame).GetTypeInfo());
         }
 
@@ -1351,10 +1356,9 @@ namespace ProtoSocket
         /// Creates an uninitialized protocol peer.
         /// </summary>
         /// <param name="coder">The protocol coder.</param>
-        /// <param name="mode">The protocol mode.</param>
-        /// <param name="bufferSize">The read buffer size.</param>
-        protected ProtocolPeer(IProtocolCoder<TFrame> coder, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) 
-            : this(mode, bufferSize) {
+        /// <param name="configuration">The peer configuration.</param>
+        protected ProtocolPeer(IProtocolCoder<TFrame> coder, PeerConfiguration configuration = null) 
+            : this(configuration) {
             _readDisposeCancelSource = CancellationTokenSource.CreateLinkedTokenSource(_readCancelSource.Token, _disposeCancelSource.Token);
             _coder = coder;
         }
@@ -1363,10 +1367,9 @@ namespace ProtoSocket
         /// Creates an uninitialized protocol peer.
         /// </summary>
         /// <param name="coderFactory">The protocol coder factory.</param>
-        /// <param name="mode">The protocol mode.</param>
-        /// <param name="bufferSize">The read buffer size.</param>
-        protected ProtocolPeer(ProtocolCoderFactory<TFrame> coderFactory, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) 
-            : this(mode, bufferSize) {
+        /// <param name="configuration">The peer configuration, uses <see cref="PeerConfiguration.Active"/> by default.</param>
+        protected ProtocolPeer(ProtocolCoderFactory<TFrame> coderFactory, PeerConfiguration configuration = null) 
+            : this(configuration) {
             _readDisposeCancelSource = CancellationTokenSource.CreateLinkedTokenSource(_readCancelSource.Token, _disposeCancelSource.Token);
             _coder = coderFactory(this);
         }

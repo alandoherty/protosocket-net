@@ -27,8 +27,8 @@ namespace ProtoSocket
         private List<TConnection> _connectionsAnnounced = new List<TConnection>();
         private ProtocolCoderFactory<TFrame> _coderFactory;
         private Uri _endpoint;
-        private ProtocolMode _peerMode;
-        private int _peerBufferSize;
+
+        private PeerConfiguration _peerConfiguration;
 
         private CancellationTokenSource _disposeSource;
         #endregion
@@ -174,7 +174,7 @@ namespace ProtoSocket
             }
 
             // create connection
-            TConnection connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coderFactory, _peerMode, _peerBufferSize);
+            TConnection connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coderFactory, _peerConfiguration);
 
             // add events
             connection.Connected += delegate (object o, PeerConnectedEventArgs<TFrame> e) {
@@ -352,16 +352,14 @@ namespace ProtoSocket
         /// Creates a new protocol server.
         /// </summary>
         /// <param name="coderFactory">The protocol coder factory.</param>
-        /// <param name="mode">The default protocol mode.</param>
-        /// <param name="bufferSize">The default buffer size.</param>
-        public ProtocolServer(ProtocolCoderFactory<TFrame> coderFactory, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) {
+        /// <param name="peerConfiguration">The peer configuration.</param>
+        public ProtocolServer(ProtocolCoderFactory<TFrame> coderFactory, PeerConfiguration peerConfiguration = null) {
             // check coder isn't null
             if (coderFactory == null)
                 throw new ArgumentNullException(nameof(coderFactory), "The coder factory cannot be null");
 
             _coderFactory = coderFactory;
-            _peerBufferSize = bufferSize;
-            _peerMode = mode;
+            _peerConfiguration = peerConfiguration;
         }
         #endregion
     }

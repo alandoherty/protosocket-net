@@ -51,10 +51,9 @@ namespace ProtoSocket
         /// </summary>
         /// <param name="server">The server.</param>
         /// <param name="coderFactory">The coder factory.</param>
-        /// <param name="mode">The mode.</param>
-        /// <param name="bufferSize">The read buffer size.</param>
-        protected ProtocolConnection(ProtocolServer<TConnection, TFrame> server, ProtocolCoderFactory<TFrame> coderFactory, ProtocolMode mode, int bufferSize)
-            : base(coderFactory, mode, bufferSize) {
+        /// <param name="configuration">The peer configuration.</param>
+        protected ProtocolConnection(ProtocolServer<TConnection, TFrame> server, ProtocolCoderFactory<TFrame> coderFactory, PeerConfiguration configuration = null)
+            : base(coderFactory, configuration) {
             _server = server;
         }
         #endregion

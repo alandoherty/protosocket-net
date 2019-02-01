@@ -69,9 +69,8 @@ namespace ProtoSocket
         /// Creates a new protocol client.
         /// </summary>
         /// <param name="coder">The coder.</param>
-        /// <param name="mode">The initial mode.</param>
-        /// <param name="bufferSize">The buffer size.</param>
-        public ProtocolClient(IProtocolCoder<TFrame> coder, ProtocolMode mode = ProtocolMode.Active, int bufferSize = 8192) : base(coder, mode, bufferSize) {
+        /// <param name="configuration">The peer configuration.</param>
+        public ProtocolClient(IProtocolCoder<TFrame> coder, PeerConfiguration configuration = null) : base(coder, configuration) {
         }
         #endregion
     }

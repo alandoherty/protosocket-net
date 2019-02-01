@@ -7,7 +7,7 @@ namespace Example.Chat
 {
     public class ChatClient : ProtocolClient<ChatFrame>
     {
-        public ChatClient() : base(new ChatCoder(), ProtocolMode.Active) {
+        public ChatClient() : base(new ChatCoder()) {
         }
     }
 }
