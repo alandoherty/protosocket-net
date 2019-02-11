@@ -296,6 +296,8 @@ namespace ProtoSocket
         /// <param name="stats">The statistics.</param>
         public void GetStatistics(out PeerStatistics stats) {
             stats = default;
+            stats.QueueIn = _receiveQueue.Count;
+            stats.QueueOut = _sendQueue.Count;
             stats.AliveSpan = _statTimeConnected == null ? TimeSpan.Zero : (_statTimeDisconnected.HasValue ? _statTimeDisconnected.Value : DateTimeOffset.UtcNow) - _statTimeConnected.Value;
             stats.BytesIn = _statBytesIn;
             stats.BytesOut = _statBytesOut;

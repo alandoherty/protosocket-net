@@ -30,6 +30,16 @@ namespace ProtoSocket
         public long BytesOut { get; internal set; }
 
         /// <summary>
+        /// Gets the number of queued frames to be sent.
+        /// </summary>
+        public int QueueOut { get; internal set; }
+
+        /// <summary>
+        /// Gets the number of queued frames waiting to be received.
+        /// </summary>
+        public int QueueIn { get; internal set; }
+
+        /// <summary>
         /// Gets the time elapsed during connection and disconnection.
         /// </summary>
         public TimeSpan AliveSpan { get; internal set; }

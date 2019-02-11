@@ -58,6 +58,29 @@ You can find a great tutorial on the .NET Blog [here](https://blogs.msdn.microso
 
 Your implementation simply needs to call `PipeReader.TryRead`, processing as much data as possible and either returning a frame (and true), or false to indicate you haven't got a full frame yet. The underlying peer will continually call your read implementation until you are able to output no more frames.
 
+### Modes
+
+By default all peers are `ProtocolMode.Active`, this means the library will take care of reading as many frames from the opposing peer as possible. Calling your handlers/subscribers as necessary when a frame arrives.
+
+In some cases this behaviour can cause problems. For example, if you have a complex negotiation process that involves upgrading the underlying protocol or modifying the frame structure, you don't want the library reading constantly and interpreting the data incorrectly.
+
+You can declare the peer mode initially via the `PeerConfiguration.Mode` property, which is passed in the constructor to both `ProtocolServer<>` and `ProtocolClient<>`. You can also change the peer mode later on with the `ProtocolPeer.Mode` property, which will stop/start the asyncronous read loop as necessary.
+
+In `ProtocolMode.Passive` mode, you must manually call `ProtocolPeer.ReceiveAsync` to receive frames. In this mode no `IObserver` subscriptions or event handlers will be called.
+
+### Raw Access
+
+If your peer is in `ProtocolMode.Passive`, you can read/write directly to the data stream underneath the peer. Be warned that you will have to perform any synchronization yourself, and refrain from calling `ReceiveAsync` at the same time.
+
+It is unsafe to use most other peer methods until you have finished with the data stream. If you close the stream the peer will close also.
+
+```csharp
+Stream stream = peer.GetStream();
+
+byte[] rawData = new byte[] { 0xCA, 0xFE, 0xBA, 0xBE };
+await stream.WriteAsync(rawData, 0, rawData.Length);
+```
+
 ### Queueing
 
 In many scenarios creating an asynchronous operation and waiting for every packet to be sent is not ideal, for these use cases you can use the `ProtocolPeer.Queue` and `ProtocolPeer.QueueAsync` methods.
@@ -98,6 +121,19 @@ upgrader.Protocols = SslProtocols.Tls | SslProtocols.Tls11;
 
 await client.UpgradeAsync(upgrader);
 client.Mode = ProtocolMode.Active;
+```
+
+### Statistics
+
+In the newer versions of ProtoSocket you can request network statistics from the peer without dynamic allocation.
+
+These statistics do not include any actions performed directly on the data stream, ie by `peer.GetStream()`.
+
+```csharp
+peer.GetStatistics(out PeerStatistics stats);
+
+Console.WriteLine($"FramesIn: {stats.FramesIn}");
+Console.WriteLine($"FramesOut: {stats.FramesOut}");
 ```
 
 ### Filters
