@@ -58,7 +58,7 @@ You can find a great tutorial on the .NET Blog [here](https://blogs.msdn.microso
 
 Your implementation simply needs to call `PipeReader.TryRead`, processing as much data as possible and either returning a frame (and true), or false to indicate you haven't got a full frame yet. The underlying peer will continually call your read implementation until you are able to output no more frames.
 
-### Modes
+### Protocol Modes
 
 By default all peers are `ProtocolMode.Active`, this means the library will take care of reading as many frames from the opposing peer as possible. Calling your handlers/subscribers as necessary when a frame arrives.
 
@@ -67,6 +67,14 @@ In some cases this behaviour can cause problems. For example, if you have a comp
 You can declare the peer mode initially via the `PeerConfiguration.Mode` property, which is passed in the constructor to both `ProtocolServer<>` and `ProtocolClient<>`. You can also change the peer mode later on with the `ProtocolPeer.Mode` property, which will stop/start the asyncronous read loop as necessary.
 
 In `ProtocolMode.Passive` mode, you must manually call `ProtocolPeer.ReceiveAsync` to receive frames. In this mode no `IObserver` subscriptions or event handlers will be called.
+
+### Accept Modes
+
+By default servers will continually accept new clients until the server is explicitly stopped, this behaviour is not always wanted as you can quickly accept more clients than your server is capable of processing.
+
+One option is to apply a connection filter that prevents too many connections, however you can implement your own more fine-grained accept logic by accepting clients manually.
+
+By setting `ProtocolServer.AcceptMode` to `AcceptMode.Passive` before starting the server, you are then responsible for calling `ProtocolServer.AcceptAsync` to accept new connections. You can optionally pass a cancellation token which will be checked if the operation has to accept multiple times, for example if a connection is filtered.
 
 ### Raw Access
 
