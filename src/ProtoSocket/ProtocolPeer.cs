@@ -1269,32 +1269,46 @@ namespace ProtoSocket
         /// Subscribes the observer to this peer.
         /// </summary>
         /// <param name="observer">The observer.</param>
+        /// <remarks>Depending on the peer configuration, you may need to pass <see cref="SubscriptionOptions.Flush"/> to get notifications for any frames which were received before adding the subscription.</remarks>
         /// <returns>A disposable wrapper for the subscription.</returns>
         public IDisposable Subscribe(IObserver<TFrame> observer) {
-            Subscription subscription = null;
-
-            // add subscription
-            lock (_subscriptions) {
-                subscription = new Subscription(this, observer, null);
-                _subscriptions.Add(subscription);
-            }
-
-            return subscription;
+            return Subscribe(observer, null, SubscriptionOptions.None);
         }
 
         /// <summary>
         /// Subscribes the observer to this peer.
         /// </summary>
         /// <param name="observer">The observer.</param>
-        /// <param name="predicate">The predicate to match for frames.</param>
+        /// <param name="options">The options.</param>
+        /// <remarks>Depending on the peer configuration, you may need to pass <see cref="SubscriptionOptions.Flush"/> to get notifications for any frames which were received before adding the subscription.</remarks>
         /// <returns>A disposable wrapper for the subscription.</returns>
-        public IDisposable Subscribe(IObserver<TFrame> observer, Predicate<TFrame> predicate) {
+        public IDisposable Subscribe(IObserver<TFrame> observer, SubscriptionOptions options = SubscriptionOptions.None) {
+            return Subscribe(observer, null, options);
+        }
+
+        /// <summary>
+        /// Subscribes the observer to this peer.
+        /// </summary>
+        /// <param name="observer">The observer.</param>
+        /// <param name="filter">The predicate filter.</param>
+        /// <param name="options">The options.</param>
+        /// <remarks>Depending on the peer configuration, you may need to pass <see cref="SubscriptionOptions.Flush"/> to get notifications for any frames which were received before adding the subscription.</remarks>
+        /// <returns>A disposable wrapper for the subscription.</returns>
+        public IDisposable Subscribe(IObserver<TFrame> observer, Predicate<TFrame> filter, SubscriptionOptions options = SubscriptionOptions.None) {
             Subscription subscription = null;
 
             // add subscription
             lock (_subscriptions) {
-                subscription = new Subscription(this, observer, predicate);
+                subscription = new Subscription(this, observer, filter);
                 _subscriptions.Add(subscription);
+            }
+
+            // check if flush requested
+            if (options.HasFlag(SubscriptionOptions.Flush)) {
+                while (TryReceive(out TFrame frame)) {
+                    if (subscription.Predicate == null || subscription.Predicate(frame))
+                        subscription.Observer.OnNext(frame);
+                }
             }
 
             return subscription;

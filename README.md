@@ -10,7 +10,7 @@
 
 # protosocket
 
-A networking library for frame-based, performant asynchronous TCP sockets on .NET Core. Open permissive MIT license and requires a minimum of .NET Standard 1.3.
+A networking library for frame-based, performant asynchronous TCP sockets on .NET Core. Open permissive MIT license and requires a minimum of .NET Standard 1.3. Battle-tested and ready for production use.
 
 ## Getting Started
 
@@ -60,7 +60,7 @@ Your implementation simply needs to call `PipeReader.TryRead`, processing as muc
 
 ### Protocol Modes
 
-By default all peers are `ProtocolMode.Active`, this means the library will take care of reading as many frames from the opposing peer as possible. Calling your handlers/subscribers as necessary when a frame arrives.
+By default all peers are `ProtocolMode.Active`, this means the library will take care of reading as many frames from the opposing peer as possible. Calling your handlers/subscribers as necessary when a frame arrives. Note that if your peer is configured as `ProtocolMode.Active`, you should use the `SubscriptionOptions.Flush` option when using subscribers so that any frames in the queue are automatically sent to the subscribers.
 
 In some cases this behaviour can cause problems. For example, if you have a complex negotiation process that involves upgrading the underlying protocol or modifying the frame structure, you don't want the library reading constantly and interpreting the data incorrectly.
 
