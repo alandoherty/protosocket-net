@@ -1221,7 +1221,7 @@ namespace ProtoSocket
             
             // set as disconnecting
             _state = ProtocolState.Disconnecting;
-            _closeReason = reason;
+            _closeReason = reason ?? _closeReason;
 
             // try and send all if we can
             try {
