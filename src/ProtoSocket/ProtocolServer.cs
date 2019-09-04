@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
@@ -378,7 +379,14 @@ namespace ProtoSocket
             }
 
             // create connection
-            TConnection connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coderFactory, _peerConfiguration);
+            TConnection connection = null;
+
+            try {
+                connection = (TConnection)Activator.CreateInstance(typeof(TConnection), this, _coderFactory, _peerConfiguration);
+            } catch(Exception) {
+                client.Dispose();
+                return null;
+            }
 
             // add events
             connection.Connected += delegate (object o, PeerConnectedEventArgs<TFrame> e) {
@@ -442,11 +450,23 @@ namespace ProtoSocket
         /// </summary>
         /// <param name="coderFactory">The protocol coder factory.</param>
         /// <param name="peerConfiguration">The peer configuration.</param>
-        public ProtocolServer(ProtocolCoderFactory<TFrame> coderFactory, PeerConfiguration peerConfiguration = null) {
+        public ProtocolServer(ProtocolCoderFactory<TFrame> coderFactory, PeerConfiguration peerConfiguration = null)
+        {
             // check coder isn't null
             if (coderFactory == null)
                 throw new ArgumentNullException(nameof(coderFactory), "The coder factory cannot be null");
 
+            // check that the connection type paramater has a valid constructor
+            bool hasValidConstructor = typeof(TConnection).GetTypeInfo().DeclaredConstructors.Where(c => c.GetParameters()
+                .Select(p => p.ParameterType)
+                .ToArray()
+                .SequenceEqual(new Type[] { typeof(ProtocolServer<TConnection, TFrame>), typeof(ProtocolCoderFactory<TFrame>), typeof(PeerConfiguration) })
+            ).Any();
+
+            if (!hasValidConstructor)
+                throw new InvalidOperationException("The connection type does not contain a valid constructor");
+
+            // check that the connection has a valid constructor
             _coderFactory = coderFactory;
             _peerConfiguration = peerConfiguration;
         }
