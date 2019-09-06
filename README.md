@@ -30,7 +30,7 @@ Install-Package ProtoSocket
 
 ### Example
 
-You can find two examples inside the project source code. An implementation of a Minecraft Classic server (very basic), and a basic binary chat server.
+You can find three examples inside the project source code. An implementation of a Minecraft Classic server (very basic), a basic binary chat application and a one-way SSL secured chat application.
 
 In the Minecraft example, you can type `/text Moi moi or /texta Moi moi` for 3D text to appear in your world. 
 
