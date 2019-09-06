@@ -16,7 +16,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Example.Chat", "samples\Exa
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Example.Minecraft", "samples\Example.Minecraft\Example.Minecraft.csproj", "{D9E913D0-B075-489A-96AE-7389C86C790E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Example.Line", "samples\Example.Line\Example.Line.csproj", "{5C1CEDDA-43A7-4501-BF28-E4A8BC142574}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Example.Line", "samples\Example.Line\Example.Line.csproj", "{5C1CEDDA-43A7-4501-BF28-E4A8BC142574}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Example.Ssl", "samples\Example.Ssl\Example.Ssl.csproj", "{8387CAE0-ADDC-4B06-BB97-17190D788EFE}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -40,6 +42,10 @@ Global
 		{5C1CEDDA-43A7-4501-BF28-E4A8BC142574}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5C1CEDDA-43A7-4501-BF28-E4A8BC142574}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5C1CEDDA-43A7-4501-BF28-E4A8BC142574}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8387CAE0-ADDC-4B06-BB97-17190D788EFE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8387CAE0-ADDC-4B06-BB97-17190D788EFE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8387CAE0-ADDC-4B06-BB97-17190D788EFE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8387CAE0-ADDC-4B06-BB97-17190D788EFE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -48,6 +54,7 @@ Global
 		{3244FC3C-5703-4B56-A754-CC6D7DB87039} = {232DEEE3-098B-46F0-803A-591781CEB430}
 		{D9E913D0-B075-489A-96AE-7389C86C790E} = {232DEEE3-098B-46F0-803A-591781CEB430}
 		{5C1CEDDA-43A7-4501-BF28-E4A8BC142574} = {232DEEE3-098B-46F0-803A-591781CEB430}
+		{8387CAE0-ADDC-4B06-BB97-17190D788EFE} = {232DEEE3-098B-46F0-803A-591781CEB430}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {056A9443-6614-4870-A4BA-EE86AF7BF8C8}

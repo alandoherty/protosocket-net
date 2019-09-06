@@ -131,6 +131,8 @@ await client.UpgradeAsync(upgrader);
 client.Mode = ProtocolMode.Active;
 ```
 
+You can find an example of using SSL [here](samples/Example.Ssl).
+
 ### Statistics
 
 In the newer versions of ProtoSocket you can request network statistics from the peer without dynamic allocation.
