@@ -42,7 +42,7 @@ namespace ProtoSocket
         /// <param name="bufferSize">The buffer size.</param>
         public PeerConfiguration(ProtocolMode protocolMode = ProtocolMode.Active, int bufferSize = 8192) {
             BufferSize = bufferSize;
-            Mode = ProtocolMode.Active;
+            Mode = protocolMode;
         }
     }
 }

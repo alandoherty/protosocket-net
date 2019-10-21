@@ -16,12 +16,25 @@ namespace ProtoSocket.Upgraders
     {
         #region Fields
         private X509Certificate2 _cert;
-        private bool _clientCertRequired;
         private string _targetHost;
-        private SslProtocols _protocols = SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12;
         #endregion
 
         #region Properties
+        /// <summary>
+        /// Gets or sets if the certificate should be verified for revocation.
+        /// </summary>
+        public bool CheckCertificateRevocation { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets the callback which is called to verify a remote certificate.
+        /// </summary>
+        public RemoteCertificateValidationCallback RemoteValidationCallback { get; set; } = null;
+
+        /// <summary>
+        /// Gets or sets the callback which is called to select a local certificate.
+        /// </summary>
+        public LocalCertificateSelectionCallback LocalSelectionCallback { get; set; } = null;
+
         /// <summary>
         /// Gets the certificate.
         /// </summary>
@@ -43,24 +56,12 @@ namespace ProtoSocket.Upgraders
         /// <summary>
         /// Gets or sets if the client certificate is required.
         /// </summary>
-        public bool ClientCertificateRequired {
-            get {
-                return _clientCertRequired; 
-            } set {
-                _clientCertRequired = value;
-            }
-        }
+        public bool ClientCertificateRequired { get; set; } = false;
 
         /// <summary>
         /// Gets or sets the protocols.
         /// </summary>
-        public SslProtocols Protocols {
-            get {
-                return _protocols;
-            } set {
-                _protocols = value;
-            }
-        }
+        public SslProtocols Protocols { get; set; } = SslProtocols.Tls | SslProtocols.Tls11 | SslProtocols.Tls12;
         #endregion
 
         #region Methods
@@ -78,12 +79,12 @@ namespace ProtoSocket.Upgraders
                 throw new InvalidOperationException("The client connection cannot upgrade to SSL without a target hostname");
 
             // authenticate
-            SslStream sslStream = new SslStream(stream, true);
+            SslStream sslStream = new SslStream(stream, true, RemoteValidationCallback, LocalSelectionCallback);
 
             if (peer.Side == ProtocolSide.Server)
-                await sslStream.AuthenticateAsServerAsync(_cert, _clientCertRequired, _protocols, true).ConfigureAwait(false);
+                await sslStream.AuthenticateAsServerAsync(_cert, ClientCertificateRequired, Protocols, CheckCertificateRevocation).ConfigureAwait(false);
             else
-                await sslStream.AuthenticateAsClientAsync(_targetHost, new X509CertificateCollection(), _protocols, true).ConfigureAwait(false);
+                await sslStream.AuthenticateAsClientAsync(_targetHost, new X509CertificateCollection(), Protocols, CheckCertificateRevocation).ConfigureAwait(false);
 
             return sslStream;
         }

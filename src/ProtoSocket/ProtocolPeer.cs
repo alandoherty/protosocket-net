@@ -831,21 +831,9 @@ namespace ProtoSocket
                 throw new InvalidOperationException("The peer is already upgrading");
             else if (_state != ProtocolState.Connected)
                 throw new InvalidOperationException("The peer must be connected to upgrade");
+            else if (_mode != ProtocolMode.Passive)
+                throw new InvalidOperationException("The peer must be in passive mode to upgrade");
 
-            // raw upgrade
-            await UpgradeRawAsync(upgrader).ConfigureAwait(false);
-
-            // restart read loop
-            _state = ProtocolState.Connected;
-            ReadLoop();
-        }
-
-        /// <summary>
-        /// Upgrades the peer with the provided upgrader. Does not check/change the state or restart the read loop.
-        /// </summary>
-        /// <param name="upgrader">The upgrader.</param>
-        /// <returns></returns>
-        private async Task UpgradeRawAsync(IProtocolUpgrader upgrader) {
             // update state
             OnStateChanged(new PeerStateChangedEventArgs<TFrame>() {
                 OldState = _state,
@@ -868,9 +856,7 @@ namespace ProtoSocket
                 NewState = ProtocolState.Connected
             });
 
-            // create new read cancel source and restart loop
-            _readCancelSource = new CancellationTokenSource();
-            _readDisposeCancelSource = CancellationTokenSource.CreateLinkedTokenSource(_readCancelSource.Token, _disposeCancelSource.Token);
+            _state = ProtocolState.Connected;
         }
 
         /// <summary>

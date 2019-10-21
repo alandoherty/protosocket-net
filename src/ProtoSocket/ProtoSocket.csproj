@@ -1,22 +1,22 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard1.3</TargetFramework>
+    <TargetFrameworks>netstandard1.3;net46</TargetFrameworks>
     <Authors>Alan Doherty &amp; WIFIPLUG Ltd</Authors>
     <Company>Alan Doherty</Company>
-    <Version>0.5.3</Version>
+    <Version>0.6.0</Version>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Description>A networking library for frame-based, performant asynchronous sockets on .NET Core</Description>
     <Copyright>Alan Doherty 2018</Copyright>
     <PackageLicenseUrl>https://github.com/alandoherty/protosocket-net/blob/master/LICENSE</PackageLicenseUrl>
     <PackageProjectUrl>https://github.com/alandoherty/protosocket-net</PackageProjectUrl>
     <PackageIconUrl>https://s3-eu-west-1.amazonaws.com/assets.alandoherty.co.uk/github/protosocket-net-nuget.png</PackageIconUrl>
-    <RepositoryUrl></RepositoryUrl>
+    <RepositoryUrl>s</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <AssemblyVersion>0.5.3.0</AssemblyVersion>
-    <FileVersion>0.5.3.0</FileVersion>
+    <AssemblyVersion>0.6.0.0</AssemblyVersion>
+    <FileVersion>0.6.0.0</FileVersion>
   </PropertyGroup>
-
+  
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
     <DocumentationFile>bin\Release\netstandard1.3\ProtoSocket.xml</DocumentationFile>
     <LangVersion>7.2</LangVersion>
