@@ -68,6 +68,60 @@ You can declare the peer mode initially via the `PeerConfiguration.Mode` propert
 
 In `ProtocolMode.Passive` mode, you must manually call `ProtocolPeer.ReceiveAsync` to receive frames. In this mode no `IObserver` subscriptions or event handlers will be called.
 
+### Correlation
+
+Many protocols are based, or support a request/reply based pattern for communication. This requires building a system to match responses to request frames, for simplicity ProtoSocket includes a mechanism to tell the peer how to match reply frames.
+
+Once you explain how your frames are correlated, you can use the `RequestAsync` method. Which hides all the plumbing of correlating the results, returning a `Task<TFrame>` representing the response.
+
+The following is an example frame with a 32-bit ID and a Body, every frame is request and response with both the request and the response having the same ID. The peer is response for incrementing and keeping track of ID's.
+
+```csharp
+public class MyFrame : ICorrelatableFrame<MyFrame>
+{
+    // Stuff inside your frame.
+    public int ID { get; set; }
+    public byte[] Body { get; set; }
+
+    // Gets the correlation ID, these should be equatable objects. The peer will check this if ShouldCorrelate returns true.
+    object ICorrelatableFrame<MyFrame>.CorrelationId {
+        get {
+            return ID;
+        }
+    }
+
+    // Unused, should always be true.
+    bool ICorrelatableFrame<MyFrame>.HasCorrelation {
+        get {
+            return true;
+        }
+    }
+
+    // If this frame should correlate, ignored when sending a frame, you should return true if this is a response
+    // frame that should be correlated with a request. Optionally you can choose to drop (ignore) the frame if no request is found with the same correlation ID.
+    bool ICorrelatableFrame<MyFrame>.ShouldCorrelate(out bool dropFrame) {
+        throw new NotImplementedException();
+    }
+
+    // Mutate the frame with a correlation.
+    MyFrame ICorrelatableFrame<MyFrame>.WithCorrelation(object correlationId) {
+        ID = (int)correlationId;
+        return this;
+    }
+}
+```
+
+You can change the `ShouldCorrelate` to suit your purposes, allowing you to have both request/reply and no-reply messages in the protocol you are implementing.
+
+```csharp
+MyFrame response = await peer.RequestAsync(new MyFrame() {
+	ID = 1,
+	Body = Encoding.ASCII.GetBytes("Hello!")
+});
+```
+
+*This API is currently not stable, I'm looking into  cleaning in the next major version*
+
 ### Accept Modes
 
 By default servers will continually accept new clients until the server is explicitly stopped, this behaviour is not always wanted as you can quickly accept more clients than your server is capable of processing.
